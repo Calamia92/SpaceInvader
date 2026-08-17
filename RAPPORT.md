@@ -136,8 +136,34 @@ Scores avant / apres decoupe par evenement :
 
 Le score du modele de phase 4 ne bouge pas, ce qui confirme surtout qu'il depend encore de la fuite par `comments`. La comparaison utile est donc celle du modele corrige : quand les temoignages d'un meme evenement ne peuvent plus etre repartis des deux cotes, le rappel passe de 13,9 a 9,3 et la precision de 4,9 a 3,0.
 
+## Phase 8 - L'ordre des choses
+
+Pour la decoupe temporelle, j'utilise `date_posted`. C'est la date ou le dossier arrive dans la base du Bureau, donc c'est celle qui correspond le mieux a une transmission que le systeme devra traiter dans le futur. La date d'observation dit quand le temoin a leve les yeux, mais pas quand le Bureau a recu l'information.
+
+- Date de coupure : 10/10/2011
+- Releves dans l'apprentissage : 66 109
+- Releves dans le test chronologique : 22 570
+
+Proportions de canulars :
+
+| Cote | Periode | Releves | Proportion de canulars |
+| --- | --- | ---: | ---: |
+| Apprentissage | avant le 10/10/2011 | 66 109 | 0,954 % |
+| Test | a partir du 10/10/2011 | 22 570 | 0,758 % |
+
+Ces deux proportions ne sont pas egales. Il y a moins de canulars marques dans les dossiers recents du test. Comme mon etiquette depend du mot `hoax` dans les commentaires, cela peut venir d'une difference dans la maniere dont le Bureau annotait les dossiers selon les periodes.
+
+Scores apres decoupe temporelle :
+
+| Modele | Canulars attrapes sur 100 vrais canulars | Vrais canulars sur 100 signalements marques |
+| --- | ---: | ---: |
+| Phase 4 avec `comments` | 100,0 | 100,0 |
+| Modele corrige sans `comments` | 2,3 | 1,6 |
+
+Le modele avec `comments` reste parfait, mais ce n'est toujours pas rassurant : il lit encore la colonne qui contient le mot ayant servi a fabriquer l'etiquette. Le modele corrige, lui, tombe fortement avec l'ordre temporel. C'est le signe que la decoupe aleatoire donnait une vision trop optimiste.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. La phase 7 ajoute une autre correction : un meme evenement ne doit plus etre coupe entre apprentissage et test.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 et 8 ajoutent deux corrections : un meme evenement ne doit plus etre coupe entre apprentissage et test, et le test doit porter sur des dossiers plus recents que ceux utilises pour apprendre.

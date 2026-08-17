@@ -129,6 +129,18 @@ class PhaseSevenResult:
     largest_event_side: str
 
 
+@dataclass(frozen=True)
+class PhaseEightResult:
+    split_date_column: str
+    cutoff_date: str
+    train_size: int
+    test_size: int
+    train_hoax_proportion: float
+    test_hoax_proportion: float
+    phase_four_temporal: PhaseFourResult
+    corrected_temporal: PhaseFourResult
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -514,6 +526,18 @@ def group_split_indices(rows: list[dict[str, Any]]) -> tuple[list[int], list[int
     return list(train_indices), list(test_indices)
 
 
+def temporal_split_indices(rows: list[dict[str, Any]]) -> tuple[list[int], list[int], str]:
+    dated_indices = sorted(
+        (row["date_posted"].date(), index)
+        for index, row in enumerate(rows)
+        if isinstance(row.get("date_posted"), datetime)
+    )
+    cutoff_date = dated_indices[int(len(dated_indices) * (1 - TEST_SIZE))][0]
+    train_indices = [index for posted_date, index in dated_indices if posted_date < cutoff_date]
+    test_indices = [index for posted_date, index in dated_indices if posted_date >= cutoff_date]
+    return train_indices, test_indices, cutoff_date.isoformat()
+
+
 def count_crossed_events(
     rows: list[dict[str, Any]],
     train_indices: list[int],
@@ -625,6 +649,31 @@ def train_phase_seven(
         corrected_after=corrected_after,
         largest_event_rows=[rows[index] for index in largest_event_indices],
         largest_event_side=largest_event_side,
+    )
+
+
+def hoax_proportion(rows: list[dict[str, Any]], indices: list[int]) -> float:
+    if not indices:
+        return 0.0
+    return sum(int(rows[index]["is_hoax"]) for index in indices) / len(indices)
+
+
+def train_phase_eight(rows: list[dict[str, Any]]) -> PhaseEightResult:
+    train_indices, test_indices, cutoff_date = temporal_split_indices(rows)
+    return PhaseEightResult(
+        split_date_column="date_posted",
+        cutoff_date=cutoff_date,
+        train_size=len(train_indices),
+        test_size=len(test_indices),
+        train_hoax_proportion=hoax_proportion(rows, train_indices),
+        test_hoax_proportion=hoax_proportion(rows, test_indices),
+        phase_four_temporal=train_classifier_on_indices(rows, ["comments"], train_indices, test_indices),
+        corrected_temporal=train_classifier_on_indices(
+            rows,
+            CORRECTED_MODEL_COLUMNS,
+            train_indices,
+            test_indices,
+        ),
     )
 
 
@@ -762,6 +811,27 @@ def print_phase_seven(result: PhaseSevenResult) -> None:
         )
 
 
+def print_phase_eight(result: PhaseEightResult) -> None:
+    print()
+    print("Phase 8 - L'ordre des choses")
+    print(f"Date utilisee pour couper : {result.split_date_column}")
+    print(f"Date de coupure : {result.cutoff_date}")
+    print(f"Apprentissage : {result.train_size} releves")
+    print(f"Test chronologique : {result.test_size} releves")
+    print(f"Proportion de canulars apprentissage : {result.train_hoax_proportion * 100:.3f}%")
+    print(f"Proportion de canulars test : {result.test_hoax_proportion * 100:.3f}%")
+    print("Scores phase 4 apres decoupe temporelle :")
+    print(
+        f"  - rappel {result.phase_four_temporal.recall * 100:.1f}, "
+        f"precision {result.phase_four_temporal.precision * 100:.1f}"
+    )
+    print("Scores du modele corrige apres decoupe temporelle :")
+    print(
+        f"  - rappel {result.corrected_temporal.recall * 100:.1f}, "
+        f"precision {result.corrected_temporal.precision * 100:.1f}"
+    )
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -795,6 +865,9 @@ def main() -> int:
 
     phase_seven = train_phase_seven(phase_two.typed_rows, phase_four, phase_five.after)
     print_phase_seven(phase_seven)
+
+    phase_eight = train_phase_eight(phase_two.typed_rows)
+    print_phase_eight(phase_eight)
     return 0
 
 
