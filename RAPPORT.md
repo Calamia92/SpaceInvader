@@ -106,8 +106,38 @@ Scores sur le meme jeu de test que les phases 4 et 5 :
 
 Le taux de bonnes reponses du stagiaire est eleve parce que les canulars sont tres rares : seulement 201 cas dans les 22 170 releves du test. Dire toujours `pas canular` donne donc presque toujours la bonne reponse, mais ne trouve strictement aucun canular. Pour defendre mon travail, je presente le rappel des canulars, parce que c'est la mesure qui repond a la vraie question du Conseil : combien de canulars le systeme arrive a attraper.
 
+## Phase 7 - Plusieurs temoins, un seul evenement
+
+Pour reconnaitre deux releves qui parlent probablement du meme evenement, j'utilise quatre informations : la date d'observation, la ville, l'etat et le pays. Je n'utilise pas le commentaire pour construire cette cle, parce que ce serait trop proche du texte que le modele apprend.
+
+- Evenements avec plusieurs temoins : 2 399
+- Nombre de temoins dans le plus gros evenement : 56
+- Evenements coupes entre apprentissage et test dans l'ancienne decoupe aleatoire : 979
+- Releves appartenant a ces evenements coupes : 2 419
+
+Le plus gros evenement est Tinley Park, `il`, `us`, le 31/10/2004. Avec la nouvelle decoupe par evenement, ses 56 releves sont tous du meme cote : apprentissage. `analyse.py` les affiche tous a l'ecran, avec leur ligne, leur heure et leur commentaire court.
+
+J'ai aussi compte les commentaires recopies exactement :
+
+- Groupes de commentaires identiques dans tout le fichier : 252
+- Releves concernes : 615
+- Groupes de commentaires identiques dans un meme evenement : 22
+
+Je ne les supprime pas, car certains textes identiques sont trop courts pour prouver une vraie copie, par exemple `Fireball`. Par contre, quand ils appartiennent au meme evenement, la nouvelle decoupe les garde ensemble du meme cote.
+
+Scores avant / apres decoupe par evenement :
+
+| Modele | Decoupe | Canulars attrapes sur 100 vrais canulars | Vrais canulars sur 100 signalements marques |
+| --- | --- | ---: | ---: |
+| Phase 4 avec `comments` | aleatoire | 99,5 | 100,0 |
+| Phase 4 avec `comments` | par evenement | 99,5 | 100,0 |
+| Modele corrige sans `comments` | aleatoire | 13,9 | 4,9 |
+| Modele corrige sans `comments` | par evenement | 9,3 | 3,0 |
+
+Le score du modele de phase 4 ne bouge pas, ce qui confirme surtout qu'il depend encore de la fuite par `comments`. La comparaison utile est donc celle du modele corrige : quand les temoignages d'un meme evenement ne peuvent plus etre repartis des deux cotes, le rappel passe de 13,9 a 9,3 et la precision de 4,9 a 3,0.
+
 ## Conclusion
 
-J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores finaux. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
+J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. La phase 7 ajoute une autre correction : un meme evenement ne doit plus etre coupe entre apprentissage et test.

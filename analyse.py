@@ -111,6 +111,24 @@ class PhaseSixResult:
     real_model_precision: float
 
 
+@dataclass(frozen=True)
+class PhaseSevenResult:
+    event_columns: list[str]
+    multi_witness_event_count: int
+    largest_event_witness_count: int
+    random_split_crossed_event_count: int
+    random_split_crossed_row_count: int
+    duplicate_comment_group_count: int
+    duplicate_comment_row_count: int
+    duplicate_comment_same_event_group_count: int
+    before: PhaseFourResult
+    after: PhaseFourResult
+    corrected_before: PhaseFourResult
+    corrected_after: PhaseFourResult
+    largest_event_rows: list[dict[str, Any]]
+    largest_event_side: str
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -286,32 +304,39 @@ def row_to_text(row: dict[str, Any], columns: list[str]) -> str:
     return " | ".join(values)
 
 
-def train_classifier(rows: list[dict[str, Any]], used_columns: list[str]) -> PhaseFourResult:
+def random_split_indices(rows: list[dict[str, Any]]) -> tuple[list[int], list[int]]:
+    from sklearn.model_selection import train_test_split
+
+    indices = list(range(len(rows)))
+    labels = [int(row["is_hoax"]) for row in rows]
+    train_indices, test_indices = train_test_split(
+        indices,
+        test_size=TEST_SIZE,
+        random_state=MODEL_RANDOM_STATE,
+        stratify=labels,
+    )
+    return list(train_indices), list(test_indices)
+
+
+def train_classifier_on_indices(
+    rows: list[dict[str, Any]],
+    used_columns: list[str],
+    train_indices: list[int],
+    test_indices: list[int],
+) -> PhaseFourResult:
     from sklearn.feature_extraction.text import CountVectorizer
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score, precision_score, recall_score
-    from sklearn.model_selection import train_test_split
     from sklearn.pipeline import Pipeline
 
     features = [row_to_text(row, used_columns) for row in rows]
     labels = [int(row["is_hoax"]) for row in rows]
     line_numbers = [int(row["_line_number"]) for row in rows]
-
-    (
-        features_train,
-        features_test,
-        labels_train,
-        labels_test,
-        _lines_train,
-        lines_test,
-    ) = train_test_split(
-        features,
-        labels,
-        line_numbers,
-        test_size=TEST_SIZE,
-        random_state=MODEL_RANDOM_STATE,
-        stratify=labels,
-    )
+    features_train = [features[index] for index in train_indices]
+    features_test = [features[index] for index in test_indices]
+    labels_train = [labels[index] for index in train_indices]
+    labels_test = [labels[index] for index in test_indices]
+    lines_test = [line_numbers[index] for index in test_indices]
 
     model = Pipeline(
         [
@@ -349,6 +374,11 @@ def train_classifier(rows: list[dict[str, Any]], used_columns: list[str]) -> Pha
         accuracy=accuracy_score(labels_test, predictions),
         test_line_examples=sorted(lines_test[:10]),
     )
+
+
+def train_classifier(rows: list[dict[str, Any]], used_columns: list[str]) -> PhaseFourResult:
+    train_indices, test_indices = random_split_indices(rows)
+    return train_classifier_on_indices(rows, used_columns, train_indices, test_indices)
 
 
 def train_phase_four(rows: list[dict[str, Any]]) -> PhaseFourResult:
@@ -454,6 +484,150 @@ def score_phase_six(rows: list[dict[str, Any]], real_model: PhaseFourResult) -> 
     )
 
 
+def normalized_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def event_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    observed_at = row.get("datetime")
+    observed_date = observed_at.date().isoformat() if isinstance(observed_at, datetime) else "date_inconnue"
+    return (
+        observed_date,
+        normalized_text(row.get("city")),
+        normalized_text(row.get("state")),
+        normalized_text(row.get("country")),
+    )
+
+
+def group_split_indices(rows: list[dict[str, Any]]) -> tuple[list[int], list[int]]:
+    from sklearn.model_selection import GroupShuffleSplit
+
+    indices = list(range(len(rows)))
+    labels = [int(row["is_hoax"]) for row in rows]
+    groups = ["|".join(event_key(row)) for row in rows]
+    splitter = GroupShuffleSplit(
+        n_splits=1,
+        test_size=TEST_SIZE,
+        random_state=MODEL_RANDOM_STATE,
+    )
+    train_indices, test_indices = next(splitter.split(indices, labels, groups))
+    return list(train_indices), list(test_indices)
+
+
+def count_crossed_events(
+    rows: list[dict[str, Any]],
+    train_indices: list[int],
+    test_indices: list[int],
+) -> tuple[int, int]:
+    train_set = set(train_indices)
+    test_set = set(test_indices)
+    event_to_indices: dict[tuple[str, str, str, str], list[int]] = {}
+
+    for index, row in enumerate(rows):
+        event_to_indices.setdefault(event_key(row), []).append(index)
+
+    crossed_events = 0
+    crossed_rows = 0
+    for indices in event_to_indices.values():
+        if len(indices) < 2:
+            continue
+        in_train = any(index in train_set for index in indices)
+        in_test = any(index in test_set for index in indices)
+        if in_train and in_test:
+            crossed_events += 1
+            crossed_rows += len(indices)
+
+    return crossed_events, crossed_rows
+
+
+def count_duplicate_comments(rows: list[dict[str, Any]]) -> tuple[int, int, int]:
+    from collections import Counter, defaultdict
+
+    comments = [str(row.get("comments", "")).strip() for row in rows]
+    global_counts = Counter(comment for comment in comments if comment)
+    duplicate_group_count = sum(1 for count in global_counts.values() if count > 1)
+    duplicate_row_count = sum(count for count in global_counts.values() if count > 1)
+
+    event_comment_counts: dict[tuple[str, str, str, str], Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        comment = str(row.get("comments", "")).strip()
+        if comment:
+            event_comment_counts[event_key(row)][comment] += 1
+
+    same_event_duplicate_group_count = sum(
+        1
+        for counter in event_comment_counts.values()
+        for count in counter.values()
+        if count > 1
+    )
+    return duplicate_group_count, duplicate_row_count, same_event_duplicate_group_count
+
+
+CORRECTED_MODEL_COLUMNS = [
+    "datetime",
+    "city",
+    "state",
+    "country",
+    "shape",
+    "duration_seconds",
+    "duration_hours_min",
+    "latitude",
+    "longitude",
+]
+
+
+def train_phase_seven(
+    rows: list[dict[str, Any]],
+    before: PhaseFourResult,
+    corrected_before: PhaseFourResult,
+) -> PhaseSevenResult:
+    from collections import defaultdict
+
+    event_to_indices: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        event_to_indices[event_key(row)].append(index)
+
+    multi_witness_events = [indices for indices in event_to_indices.values() if len(indices) > 1]
+    largest_event_indices = max(event_to_indices.values(), key=len)
+
+    random_train_indices, random_test_indices = random_split_indices(rows)
+    crossed_events, crossed_rows = count_crossed_events(rows, random_train_indices, random_test_indices)
+
+    group_train_indices, group_test_indices = group_split_indices(rows)
+    after = train_classifier_on_indices(rows, ["comments"], group_train_indices, group_test_indices)
+    corrected_after = train_classifier_on_indices(
+        rows,
+        CORRECTED_MODEL_COLUMNS,
+        group_train_indices,
+        group_test_indices,
+    )
+    group_test_set = set(group_test_indices)
+    largest_event_side = "test" if largest_event_indices[0] in group_test_set else "apprentissage"
+
+    (
+        duplicate_comment_group_count,
+        duplicate_comment_row_count,
+        duplicate_comment_same_event_group_count,
+    ) = count_duplicate_comments(rows)
+
+    return PhaseSevenResult(
+        event_columns=["datetime.date", "city", "state", "country"],
+        multi_witness_event_count=len(multi_witness_events),
+        largest_event_witness_count=len(largest_event_indices),
+        random_split_crossed_event_count=crossed_events,
+        random_split_crossed_row_count=crossed_rows,
+        duplicate_comment_group_count=duplicate_comment_group_count,
+        duplicate_comment_row_count=duplicate_comment_row_count,
+        duplicate_comment_same_event_group_count=duplicate_comment_same_event_group_count,
+        before=before,
+        after=after,
+        corrected_before=corrected_before,
+        corrected_after=corrected_after,
+        largest_event_rows=[rows[index] for index in largest_event_indices],
+        largest_event_side=largest_event_side,
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -552,6 +726,42 @@ def print_phase_six(result: PhaseSixResult) -> None:
     print(f"Precision canular du vrai modele : {result.real_model_precision * 100:.1f}")
 
 
+def print_phase_seven(result: PhaseSevenResult) -> None:
+    print()
+    print("Phase 7 - Plusieurs temoins, un seul evenement")
+    print(f"Colonnes de regroupement : {', '.join(result.event_columns)}")
+    print(f"Evenements avec plusieurs temoins : {result.multi_witness_event_count}")
+    print(f"Temoins dans le plus gros evenement : {result.largest_event_witness_count}")
+    print(f"Evenements coupes dans l'ancienne decoupe : {result.random_split_crossed_event_count}")
+    print(f"Releves a cheval dans l'ancienne decoupe : {result.random_split_crossed_row_count}")
+    print(
+        "Commentaires recopies exactement : "
+        f"{result.duplicate_comment_group_count} groupes, {result.duplicate_comment_row_count} releves"
+    )
+    print(
+        "Commentaires recopies exactement dans un meme evenement : "
+        f"{result.duplicate_comment_same_event_group_count} groupes"
+    )
+    print("Scores phase 4 avant / apres decoupe par evenement :")
+    print(f"  - avant : rappel {result.before.recall * 100:.1f}, precision {result.before.precision * 100:.1f}")
+    print(f"  - apres : rappel {result.after.recall * 100:.1f}, precision {result.after.precision * 100:.1f}")
+    print("Scores du modele corrige avant / apres decoupe par evenement :")
+    print(
+        f"  - avant : rappel {result.corrected_before.recall * 100:.1f}, "
+        f"precision {result.corrected_before.precision * 100:.1f}"
+    )
+    print(
+        f"  - apres : rappel {result.corrected_after.recall * 100:.1f}, "
+        f"precision {result.corrected_after.precision * 100:.1f}"
+    )
+    print(f"Plus gros evenement, cote {result.largest_event_side} :")
+    for row in result.largest_event_rows:
+        print(
+            f"  - ligne {row['_line_number']}: {row['datetime']} | "
+            f"{row['city']} | {row['state']} | {row['country']} | {str(row['comments'])[:80]}"
+        )
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -582,6 +792,9 @@ def main() -> int:
 
     phase_six = score_phase_six(phase_two.typed_rows, phase_five.after)
     print_phase_six(phase_six)
+
+    phase_seven = train_phase_seven(phase_two.typed_rows, phase_four, phase_five.after)
+    print_phase_seven(phase_seven)
     return 0
 
 
