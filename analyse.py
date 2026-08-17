@@ -156,6 +156,17 @@ class PhaseNineResult:
     treatment: str
 
 
+@dataclass(frozen=True)
+class PhaseTenResult:
+    split_name: str
+    train_hoax_proportion: float
+    test_hoax_proportion: float
+    corrected_result: PhaseFourResult
+    single_prediction: int
+    single_prediction_label: str
+    single_report_text: str
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -348,27 +359,12 @@ def random_split_indices(rows: list[dict[str, Any]]) -> tuple[list[int], list[in
     return list(train_indices), list(test_indices)
 
 
-def train_classifier_on_indices(
-    rows: list[dict[str, Any]],
-    used_columns: list[str],
-    train_indices: list[int],
-    test_indices: list[int],
-) -> PhaseFourResult:
+def build_model() -> Any:
     from sklearn.feature_extraction.text import CountVectorizer
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import accuracy_score, precision_score, recall_score
     from sklearn.pipeline import Pipeline
 
-    features = [row_to_text(row, used_columns) for row in rows]
-    labels = [int(row["is_hoax"]) for row in rows]
-    line_numbers = [int(row["_line_number"]) for row in rows]
-    features_train = [features[index] for index in train_indices]
-    features_test = [features[index] for index in test_indices]
-    labels_train = [labels[index] for index in train_indices]
-    labels_test = [labels[index] for index in test_indices]
-    lines_test = [line_numbers[index] for index in test_indices]
-
-    model = Pipeline(
+    return Pipeline(
         [
             (
                 "vectorizer",
@@ -389,7 +385,40 @@ def train_classifier_on_indices(
             ),
         ]
     )
+
+
+def fit_model_on_indices(
+    rows: list[dict[str, Any]],
+    used_columns: list[str],
+    train_indices: list[int],
+) -> Any:
+    features = [row_to_text(row, used_columns) for row in rows]
+    labels = [int(row["is_hoax"]) for row in rows]
+    features_train = [features[index] for index in train_indices]
+    labels_train = [labels[index] for index in train_indices]
+
+    model = build_model()
     model.fit(features_train, labels_train)
+    return model
+
+
+def train_classifier_on_indices(
+    rows: list[dict[str, Any]],
+    used_columns: list[str],
+    train_indices: list[int],
+    test_indices: list[int],
+) -> PhaseFourResult:
+    from sklearn.metrics import accuracy_score, precision_score, recall_score
+
+    features = [row_to_text(row, used_columns) for row in rows]
+    labels = [int(row["is_hoax"]) for row in rows]
+    line_numbers = [int(row["_line_number"]) for row in rows]
+    features_test = [features[index] for index in test_indices]
+    labels_train = [labels[index] for index in train_indices]
+    labels_test = [labels[index] for index in test_indices]
+    lines_test = [line_numbers[index] for index in test_indices]
+
+    model = fit_model_on_indices(rows, used_columns, train_indices)
     predictions = model.predict(features_test)
 
     return PhaseFourResult(
@@ -736,6 +765,38 @@ def train_phase_nine(rows: list[dict[str, Any]]) -> PhaseNineResult:
     )
 
 
+def predict_single_report(model: Any, row: dict[str, Any], used_columns: list[str]) -> int:
+    return int(model.predict([row_to_text(row, used_columns)])[0])
+
+
+def train_phase_ten(rows: list[dict[str, Any]]) -> PhaseTenResult:
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    model = fit_model_on_indices(rows, CORRECTED_MODEL_COLUMNS, train_indices)
+    corrected_result = train_classifier_on_indices(rows, CORRECTED_MODEL_COLUMNS, train_indices, test_indices)
+    single_report = {
+        "_line_number": "manuel",
+        "datetime": datetime(2014, 6, 1, 22, 30),
+        "city": "tinley park",
+        "state": "il",
+        "country": "us",
+        "shape": "light",
+        "duration_seconds": 180.0,
+        "duration_hours_min": "3 minutes",
+        "latitude": 41.5734,
+        "longitude": -87.7845,
+    }
+    prediction = predict_single_report(model, single_report, CORRECTED_MODEL_COLUMNS)
+    return PhaseTenResult(
+        split_name="decoupe temporelle sur date_posted",
+        train_hoax_proportion=hoax_proportion(rows, train_indices),
+        test_hoax_proportion=hoax_proportion(rows, test_indices),
+        corrected_result=corrected_result,
+        single_prediction=prediction,
+        single_prediction_label="canular" if prediction else "pas canular",
+        single_report_text=row_to_text(single_report, CORRECTED_MODEL_COLUMNS),
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -903,6 +964,22 @@ def print_phase_nine(result: PhaseNineResult) -> None:
     print(f"Traitement retenu : {result.treatment}")
 
 
+def print_phase_ten(result: PhaseTenResult) -> None:
+    print()
+    print("Phase 10 - La chaine de traitement du Bureau")
+    print(f"Decoupe utilisee : {result.split_name}")
+    print(f"Proportion de canulars apprentissage : {result.train_hoax_proportion * 100:.3f}%")
+    print(f"Proportion de canulars test : {result.test_hoax_proportion * 100:.3f}%")
+    print("Scores apres correction de la chaine :")
+    print(
+        f"  - rappel {result.corrected_result.recall * 100:.1f}, "
+        f"precision {result.corrected_result.precision * 100:.1f}"
+    )
+    print("Releve manuel donne a la chaine :")
+    print(f"  - {result.single_report_text}")
+    print(f"Prediction sortie : {result.single_prediction} ({result.single_prediction_label})")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -942,6 +1019,9 @@ def main() -> int:
 
     phase_nine = train_phase_nine(phase_two.typed_rows)
     print_phase_nine(phase_nine)
+
+    phase_ten = train_phase_ten(phase_two.typed_rows)
+    print_phase_ten(phase_ten)
     return 0
 
 

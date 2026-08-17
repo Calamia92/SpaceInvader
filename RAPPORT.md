@@ -178,8 +178,34 @@ Traitement retenu : je ne jette pas ces lignes et je ne remplace pas les trous p
 
 Ce traitement ne detruit pas ce que je viens de mesurer, parce que le modele peut toujours voir qu'une case etait vide. Par exemple, `country=__missing__` reste different de `country=us`.
 
+## Phase 10 - La chaine de traitement du Bureau
+
+La correction importante est dans l'ordre des operations : je coupe d'abord les indices d'apprentissage et de test, puis le `CountVectorizer` apprend son vocabulaire seulement sur les textes construits depuis l'apprentissage. Le test est transforme ensuite avec ce vocabulaire deja appris. Le marqueur `__missing__` est une regle fixe, pas une valeur calculee depuis tout le fichier.
+
+J'utilise la decoupe temporelle de la phase 8 :
+
+| Cote | Releves | Proportion de canulars |
+| --- | ---: | ---: |
+| Apprentissage | 66 109 | 0,954 % |
+| Test | 22 570 | 0,758 % |
+
+Demonstration avec un releve invente a la main :
+
+```text
+datetime=2014-06-01 22:30:00 | city=tinley park | state=il | country=us | shape=light | duration_seconds=180.0 | duration_hours_min=3 minutes | latitude=41.5734 | longitude=-87.7845
+```
+
+Ce releve passe dans la meme chaine que les vraies lignes : construction des variables, vectorisation avec le vocabulaire appris sur l'apprentissage, puis prediction par la regression logistique. La prediction sortie par `analyse.py` est `0`, donc `pas canular`.
+
+Scores apres correction de la chaine, sur le test temporel :
+
+- Sur 100 canulars reellement presents, le modele en attrape 2,3
+- Sur 100 releves que le modele signale, 1,6 sont vraiment marques comme canulars
+
+Ces chiffres sont bas, mais ils sont plus honnetes : le vocabulaire du modele n'a pas ete appris sur les releves du test.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7, 8 et 9 ajoutent trois corrections : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents que ceux utilises pour apprendre, et les cases vides doivent rester visibles.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 10 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, et le vocabulaire du modele doit etre appris uniquement sur l'apprentissage.
