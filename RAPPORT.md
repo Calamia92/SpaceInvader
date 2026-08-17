@@ -92,3 +92,16 @@ Scores avant / apres :
 | Apres audit | champs de lieu, temps, forme, duree et coordonnees | 13,9 | 4,9 |
 
 Le premier chiffre n'avait pas vraiment le droit d'exister : le modele lisait le meme texte qui avait servi a fabriquer la reponse attendue. Il ne detectait pas un canular a partir d'un nouveau signalement, il reconnaissait surtout la trace du mot `hoax` deja ecrit dans le dossier. Une fois cette information retiree, les autres champs donnent quelques signaux faibles, mais beaucoup moins fiables.
+
+## Phase 6 - Le modele le plus bete du Bureau
+
+Systeme du stagiaire : repondre toujours `ce n'est pas un canular`.
+
+Scores sur le meme jeu de test que les phases 4 et 5 :
+
+| Systeme | Taux de bonnes reponses | Canulars attrapes sur 100 vrais canulars | Vrais canulars sur 100 signalements marques |
+| --- | ---: | ---: | ---: |
+| Stagiaire | 99,09 % | 0,0 | 0,0 |
+| Modele corrige | 96,77 % | 13,9 | 4,9 |
+
+Le taux de bonnes reponses du stagiaire est eleve parce que les canulars sont tres rares : seulement 201 cas dans les 22 170 releves du test. Dire toujours `pas canular` donne donc presque toujours la bonne reponse, mais ne trouve strictement aucun canular. Pour defendre mon travail, je presente le rappel des canulars, parce que c'est la mesure qui repond a la vraie question du Conseil : combien de canulars le systeme arrive a attraper.

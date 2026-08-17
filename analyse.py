@@ -101,6 +101,16 @@ class PhaseFiveResult:
     after: PhaseFourResult
 
 
+@dataclass(frozen=True)
+class PhaseSixResult:
+    intern_accuracy: float
+    real_model_accuracy: float
+    intern_recall: float
+    intern_precision: float
+    real_model_recall: float
+    real_model_precision: float
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -421,6 +431,29 @@ def train_phase_five(rows: list[dict[str, Any]], before: PhaseFourResult) -> Pha
     )
 
 
+def score_phase_six(rows: list[dict[str, Any]], real_model: PhaseFourResult) -> PhaseSixResult:
+    from sklearn.metrics import accuracy_score, precision_score, recall_score
+    from sklearn.model_selection import train_test_split
+
+    labels = [int(row["is_hoax"]) for row in rows]
+    _labels_train, labels_test = train_test_split(
+        labels,
+        test_size=TEST_SIZE,
+        random_state=MODEL_RANDOM_STATE,
+        stratify=labels,
+    )
+    intern_predictions = [0] * len(labels_test)
+
+    return PhaseSixResult(
+        intern_accuracy=accuracy_score(labels_test, intern_predictions),
+        real_model_accuracy=real_model.accuracy,
+        intern_recall=recall_score(labels_test, intern_predictions, zero_division=0),
+        intern_precision=precision_score(labels_test, intern_predictions, zero_division=0),
+        real_model_recall=real_model.recall,
+        real_model_precision=real_model.precision,
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -508,6 +541,17 @@ def print_phase_five(result: PhaseFiveResult) -> None:
     )
 
 
+def print_phase_six(result: PhaseSixResult) -> None:
+    print()
+    print("Phase 6 - Le modele le plus bete du Bureau")
+    print(f"Taux de bonnes reponses du stagiaire : {result.intern_accuracy * 100:.2f}%")
+    print(f"Taux de bonnes reponses du vrai modele : {result.real_model_accuracy * 100:.2f}%")
+    print(f"Rappel canular du stagiaire : {result.intern_recall * 100:.1f}")
+    print(f"Rappel canular du vrai modele : {result.real_model_recall * 100:.1f}")
+    print(f"Precision canular du stagiaire : {result.intern_precision * 100:.1f}")
+    print(f"Precision canular du vrai modele : {result.real_model_precision * 100:.1f}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -535,6 +579,9 @@ def main() -> int:
 
     phase_five = train_phase_five(phase_two.typed_rows, phase_four)
     print_phase_five(phase_five)
+
+    phase_six = score_phase_six(phase_two.typed_rows, phase_five.after)
+    print_phase_six(phase_six)
     return 0
 
 
