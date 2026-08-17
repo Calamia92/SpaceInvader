@@ -6,7 +6,9 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 
 DATA_URL = (
@@ -47,6 +49,20 @@ class PhaseOneResult:
     problem_rows: list[ProblemRow]
 
 
+@dataclass(frozen=True)
+class ConversionIssue:
+    field: str
+    line_number: int
+    value: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PhaseTwoResult:
+    typed_rows: list[dict[str, Any]]
+    issues: list[ConversionIssue]
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -72,14 +88,16 @@ def sha256_file(path: Path) -> str:
 
 
 def load_phase_one(path: Path = DATA_PATH) -> PhaseOneResult:
-    loaded_rows = 0
+    loaded_rows: list[dict[str, str | int]] = []
     problem_rows: list[ProblemRow] = []
 
     with path.open(newline="", encoding="utf-8", errors="replace") as file:
         reader = csv.reader(file)
         for line_number, row in enumerate(reader, start=1):
             if len(row) == len(HEADERS):
-                loaded_rows += 1
+                loaded = dict(zip(HEADERS, row, strict=True))
+                loaded["_line_number"] = line_number
+                loaded_rows.append(loaded)
                 continue
 
             problem_rows.append(
@@ -91,10 +109,93 @@ def load_phase_one(path: Path = DATA_PATH) -> PhaseOneResult:
             )
 
     return PhaseOneResult(
-        total_rows=loaded_rows + len(problem_rows),
-        loaded_rows=loaded_rows,
+        total_rows=len(loaded_rows) + len(problem_rows),
+        loaded_rows=len(loaded_rows),
         problem_rows=problem_rows,
     )
+
+
+def load_well_formed_rows(path: Path = DATA_PATH) -> list[dict[str, str | int]]:
+    rows: list[dict[str, str | int]] = []
+
+    with path.open(newline="", encoding="utf-8", errors="replace") as file:
+        reader = csv.reader(file)
+        for line_number, row in enumerate(reader, start=1):
+            if len(row) != len(HEADERS):
+                continue
+
+            loaded = dict(zip(HEADERS, row, strict=True))
+            loaded["_line_number"] = line_number
+            rows.append(loaded)
+
+    return rows
+
+
+def parse_observation_datetime(value: str) -> tuple[datetime | None, str | None]:
+    try:
+        return datetime.strptime(value, "%m/%d/%Y %H:%M"), None
+    except ValueError:
+        pass
+
+    if value.endswith(" 24:00"):
+        date_part = value.removesuffix(" 24:00")
+        try:
+            normalized = datetime.strptime(date_part, "%m/%d/%Y") + timedelta(days=1)
+            return normalized, "heure 24:00 normalisee au lendemain 00:00"
+        except ValueError:
+            return None, "date invalide"
+
+    return None, "date/heure invalide"
+
+
+def parse_posted_date(value: str) -> tuple[datetime | None, str | None]:
+    try:
+        return datetime.strptime(value, "%m/%d/%Y"), None
+    except ValueError:
+        return None, "date invalide"
+
+
+def parse_float(value: str) -> tuple[float | None, str | None]:
+    if value == "":
+        return None, "valeur vide"
+
+    try:
+        return float(value), None
+    except ValueError:
+        return None, "nombre invalide"
+
+
+def convert_phase_two(rows: list[dict[str, str | int]]) -> PhaseTwoResult:
+    typed_rows: list[dict[str, Any]] = []
+    issues: list[ConversionIssue] = []
+
+    for row in rows:
+        line_number = int(row["_line_number"])
+        typed: dict[str, Any] = {"_line_number": line_number}
+
+        for field in ["city", "state", "country", "shape", "duration_hours_min", "comments"]:
+            typed[field] = row[field]
+
+        for field in ["duration_seconds", "latitude", "longitude"]:
+            value = str(row[field])
+            parsed, reason = parse_float(value)
+            typed[field] = parsed
+            if reason is not None:
+                issues.append(ConversionIssue(field, line_number, value, reason))
+
+        observed_at, reason = parse_observation_datetime(str(row["datetime"]))
+        typed["datetime"] = observed_at
+        if reason is not None:
+            issues.append(ConversionIssue("datetime", line_number, str(row["datetime"]), reason))
+
+        posted_at, reason = parse_posted_date(str(row["date_posted"]))
+        typed["date_posted"] = posted_at
+        if reason is not None:
+            issues.append(ConversionIssue("date_posted", line_number, str(row["date_posted"]), reason))
+
+        typed_rows.append(typed)
+
+    return PhaseTwoResult(typed_rows=typed_rows, issues=issues)
 
 
 def print_phase_one(result: PhaseOneResult) -> None:
@@ -112,6 +213,30 @@ def print_phase_one(result: PhaseOneResult) -> None:
         print(f"- champs : {first_problem.raw_fields}")
 
 
+def print_phase_two(result: PhaseTwoResult) -> None:
+    print()
+    print("Phase 2 - Rien n'est du bon type")
+
+    converted_fields = ["duration_seconds", "latitude", "longitude", "datetime", "date_posted"]
+    for field in converted_fields:
+        field_issues = [issue for issue in result.issues if issue.field == field]
+        print(f"{field} : {len(field_issues)} valeur(s) signalee(s)")
+
+        examples: list[ConversionIssue] = []
+        seen: set[tuple[str, str]] = set()
+        for issue in field_issues:
+            key = (issue.value, issue.reason)
+            if key in seen:
+                continue
+            seen.add(key)
+            examples.append(issue)
+            if len(examples) == 3:
+                break
+
+        for issue in examples:
+            print(f"  - ligne {issue.line_number}: {issue.value!r} ({issue.reason})")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -126,6 +251,10 @@ def main() -> int:
 
     phase_one = load_phase_one()
     print_phase_one(phase_one)
+
+    well_formed_rows = load_well_formed_rows()
+    phase_two = convert_phase_two(well_formed_rows)
+    print_phase_two(phase_two)
     return 0
 
 
