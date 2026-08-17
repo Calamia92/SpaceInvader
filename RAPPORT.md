@@ -64,3 +64,31 @@ Resultats sur le jeu de test :
 - Sur 100 releves que le modele signale, 100,0 sont vraiment marques comme canulars
 
 Ce premier verdict est tres fort, mais il faut deja se mefier : l'etiquette de la phase 3 vient du texte `comments`, et le modele lit aussi `comments`. La phase suivante doit verifier si ce champ etait vraiment disponible au bon moment.
+
+## Phase 5 - Le Conseil ne vous croit pas
+
+Audit des colonnes utilisees avant et apres correction :
+
+| Colonne | Qui ecrit cette information | A quel moment | Savait deja si c'etait un canular |
+| --- | --- | --- | --- |
+| `comments` | temoin puis note editoriale du Bureau | recit initial puis traitement du dossier | oui |
+| `datetime` | temoin | au moment du signalement | non |
+| `city` | temoin | au moment du signalement | non |
+| `state` | temoin ou formulaire | au moment du signalement | non |
+| `country` | temoin ou formulaire | au moment du signalement | non |
+| `shape` | temoin | au moment du signalement | non |
+| `duration_seconds` | service de normalisation | apres saisie de la duree | non |
+| `duration_hours_min` | temoin | au moment du signalement | non |
+| `latitude` | capteur ou geocodage | avant l'analyse du dossier | non |
+| `longitude` | capteur ou geocodage | avant l'analyse du dossier | non |
+
+La colonne `comments` sort du modele, parce que mon etiquette `is_hoax` vient justement du mot `hoax` trouve dans ce texte. Le modele corrige utilise donc `datetime`, `city`, `state`, `country`, `shape`, `duration_seconds`, `duration_hours_min`, `latitude` et `longitude`.
+
+Scores avant / apres :
+
+| Version du modele | Colonnes principales | Canulars attrapes sur 100 vrais canulars | Vrais canulars sur 100 signalements marques |
+| --- | --- | ---: | ---: |
+| Avant audit | `comments` | 99,5 | 100,0 |
+| Apres audit | champs de lieu, temps, forme, duree et coordonnees | 13,9 | 4,9 |
+
+Le premier chiffre n'avait pas vraiment le droit d'exister : le modele lisait le meme texte qui avait servi a fabriquer la reponse attendue. Il ne detectait pas un canular a partir d'un nouveau signalement, il reconnaissait surtout la trace du mot `hoax` deja ecrit dans le dossier. Une fois cette information retiree, les autres champs donnent quelques signaux faibles, mais beaucoup moins fiables.

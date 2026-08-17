@@ -86,6 +86,21 @@ class PhaseFourResult:
     test_line_examples: list[int]
 
 
+@dataclass(frozen=True)
+class ColumnAudit:
+    column: str
+    writer: str
+    moment: str
+    knew_hoax_already: bool
+
+
+@dataclass(frozen=True)
+class PhaseFiveResult:
+    column_audit: list[ColumnAudit]
+    before: PhaseFourResult
+    after: PhaseFourResult
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -222,6 +237,8 @@ def convert_phase_two(rows: list[dict[str, str | int]]) -> PhaseTwoResult:
 
 
 HOAX_PATTERN = re.compile(r"\bhoax(?:es|ed)?\b", re.IGNORECASE)
+MODEL_RANDOM_STATE = 42
+TEST_SIZE = 0.25
 
 
 def is_hoax_from_comment(comment: str) -> bool:
@@ -249,30 +266,40 @@ def label_phase_three(rows: list[dict[str, Any]]) -> PhaseThreeResult:
     )
 
 
-def train_phase_four(rows: list[dict[str, Any]]) -> PhaseFourResult:
+def row_to_text(row: dict[str, Any], columns: list[str]) -> str:
+    values: list[str] = []
+    for column in columns:
+        value = row.get(column)
+        if isinstance(value, datetime):
+            value = value.isoformat(sep=" ")
+        values.append(f"{column}={'' if value is None else value}")
+    return " | ".join(values)
+
+
+def train_classifier(rows: list[dict[str, Any]], used_columns: list[str]) -> PhaseFourResult:
     from sklearn.feature_extraction.text import CountVectorizer
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score, precision_score, recall_score
     from sklearn.model_selection import train_test_split
     from sklearn.pipeline import Pipeline
 
-    comments = [str(row["comments"]) for row in rows]
+    features = [row_to_text(row, used_columns) for row in rows]
     labels = [int(row["is_hoax"]) for row in rows]
     line_numbers = [int(row["_line_number"]) for row in rows]
 
     (
-        comments_train,
-        comments_test,
+        features_train,
+        features_test,
         labels_train,
         labels_test,
         _lines_train,
         lines_test,
     ) = train_test_split(
-        comments,
+        features,
         labels,
         line_numbers,
-        test_size=0.25,
-        random_state=42,
+        test_size=TEST_SIZE,
+        random_state=MODEL_RANDOM_STATE,
         stratify=labels,
     )
 
@@ -292,17 +319,17 @@ def train_phase_four(rows: list[dict[str, Any]]) -> PhaseFourResult:
                     class_weight="balanced",
                     max_iter=500,
                     solver="liblinear",
-                    random_state=42,
+                    random_state=MODEL_RANDOM_STATE,
                 ),
             ),
         ]
     )
-    model.fit(comments_train, labels_train)
-    predictions = model.predict(comments_test)
+    model.fit(features_train, labels_train)
+    predictions = model.predict(features_test)
 
     return PhaseFourResult(
         model_name="CountVectorizer + LogisticRegression",
-        used_columns=["comments"],
+        used_columns=used_columns,
         train_size=len(labels_train),
         test_size=len(labels_test),
         test_hoax_count=sum(labels_test),
@@ -311,6 +338,86 @@ def train_phase_four(rows: list[dict[str, Any]]) -> PhaseFourResult:
         precision=precision_score(labels_test, predictions, zero_division=0),
         accuracy=accuracy_score(labels_test, predictions),
         test_line_examples=sorted(lines_test[:10]),
+    )
+
+
+def train_phase_four(rows: list[dict[str, Any]]) -> PhaseFourResult:
+    return train_classifier(rows, ["comments"])
+
+
+def train_phase_five(rows: list[dict[str, Any]], before: PhaseFourResult) -> PhaseFiveResult:
+    column_audit = [
+        ColumnAudit(
+            column="comments",
+            writer="temoin puis note editoriale du Bureau",
+            moment="recit initial puis traitement du dossier",
+            knew_hoax_already=True,
+        ),
+        ColumnAudit(
+            column="datetime",
+            writer="temoin",
+            moment="au moment du signalement",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="city",
+            writer="temoin",
+            moment="au moment du signalement",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="state",
+            writer="temoin ou formulaire",
+            moment="au moment du signalement",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="country",
+            writer="temoin ou formulaire",
+            moment="au moment du signalement",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="shape",
+            writer="temoin",
+            moment="au moment du signalement",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="duration_seconds",
+            writer="service de normalisation",
+            moment="apres saisie de la duree",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="duration_hours_min",
+            writer="temoin",
+            moment="au moment du signalement",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="latitude",
+            writer="capteur ou geocodage",
+            moment="avant l'analyse du dossier",
+            knew_hoax_already=False,
+        ),
+        ColumnAudit(
+            column="longitude",
+            writer="capteur ou geocodage",
+            moment="avant l'analyse du dossier",
+            knew_hoax_already=False,
+        ),
+    ]
+    allowed_columns = [
+        audit.column
+        for audit in column_audit
+        if not audit.knew_hoax_already and audit.column != "date_posted"
+    ]
+
+    return PhaseFiveResult(
+        column_audit=column_audit,
+        before=before,
+        after=train_classifier(rows, allowed_columns),
     )
 
 
@@ -382,6 +489,25 @@ def print_phase_four(result: PhaseFourResult) -> None:
     print(f"Exemples de lignes du jeu de test : {result.test_line_examples}")
 
 
+def print_phase_five(result: PhaseFiveResult) -> None:
+    print()
+    print("Phase 5 - Le Conseil ne vous croit pas")
+    print("Audit des colonnes :")
+    for audit in result.column_audit:
+        answer = "oui" if audit.knew_hoax_already else "non"
+        print(f"  - {audit.column}: {audit.writer}, {audit.moment}, savait deja ? {answer}")
+
+    print("Scores avant / apres retrait des colonnes interdites :")
+    print(
+        f"  - avant : rappel {result.before.recall * 100:.1f}, "
+        f"precision {result.before.precision * 100:.1f}"
+    )
+    print(
+        f"  - apres : rappel {result.after.recall * 100:.1f}, "
+        f"precision {result.after.precision * 100:.1f}"
+    )
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -406,6 +532,9 @@ def main() -> int:
 
     phase_four = train_phase_four(phase_two.typed_rows)
     print_phase_four(phase_four)
+
+    phase_five = train_phase_five(phase_two.typed_rows, phase_four)
+    print_phase_five(phase_five)
     return 0
 
 
