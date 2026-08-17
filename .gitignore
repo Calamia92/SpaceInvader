@@ -6,6 +6,8 @@ __pycache__/
 
 .idea/
 
+info/
+
 data/*.csv
 data/*.tmp
 data/*.part
