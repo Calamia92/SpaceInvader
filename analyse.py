@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import math
 import statistics
 import re
 import sys
@@ -192,6 +193,22 @@ class PhaseElevenResult:
     longer_than_day_count: int
     longest_examples: list[LongDurationExample]
     conflict_examples: list[DurationConflictExample]
+
+
+@dataclass(frozen=True)
+class PhaseTwelveResult:
+    before_width: int
+    after_width: int
+    city_rule: str
+    shape_rule: str
+    singleton_city_count: int
+    kept_city_count: int
+    raw_shape_count: int
+    normalized_shape_count: int
+    distance_23_to_0: float
+    distance_23_to_20: float
+    recall: float
+    precision: float
 
 
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
@@ -1033,6 +1050,149 @@ def train_phase_eleven(rows: list[dict[str, Any]]) -> PhaseElevenResult:
     )
 
 
+CITY_MIN_COUNT = 20
+SHAPE_MIN_COUNT = 20
+
+
+def canonical_shape(value: Any) -> str:
+    shape = normalized_text(value)
+    if not shape:
+        return MISSING_MARKER
+    replacements = {
+        "changed": "changing",
+        "round": "circle",
+    }
+    return replacements.get(shape, shape)
+
+
+def encode_shape(value: Any, frequent_shapes: set[str]) -> str:
+    shape = canonical_shape(value)
+    if shape == MISSING_MARKER:
+        return MISSING_MARKER
+    if shape in frequent_shapes:
+        return shape
+    return "__rare_shape__"
+
+
+def hour_components(value: Any) -> tuple[float, float]:
+    if not isinstance(value, datetime):
+        return 0.0, 0.0
+    hour = value.hour + value.minute / 60.0
+    angle = 2 * math.pi * hour / 24.0
+    return math.sin(angle), math.cos(angle)
+
+
+def hour_distance(first_hour: int, second_hour: int) -> float:
+    first_sin, first_cos = hour_components(datetime(2000, 1, 1, first_hour, 0))
+    second_sin, second_cos = hour_components(datetime(2000, 1, 1, second_hour, 0))
+    return math.hypot(first_sin - second_sin, first_cos - second_cos)
+
+
+def fit_frequent_cities(rows: list[dict[str, Any]], train_indices: list[int]) -> set[str]:
+    from collections import Counter
+
+    counts = Counter(normalized_text(rows[index].get("city")) for index in train_indices)
+    return {city for city, count in counts.items() if city and count >= CITY_MIN_COUNT}
+
+
+def fit_frequent_shapes(rows: list[dict[str, Any]], train_indices: list[int]) -> set[str]:
+    from collections import Counter
+
+    counts = Counter(canonical_shape(rows[index].get("shape")) for index in train_indices)
+    return {
+        shape
+        for shape, count in counts.items()
+        if shape != MISSING_MARKER and count >= SHAPE_MIN_COUNT
+    }
+
+
+def phase_twelve_features(
+    row: dict[str, Any],
+    frequent_cities: set[str],
+    frequent_shapes: set[str],
+) -> dict[str, float | str]:
+    city = normalized_text(row.get("city"))
+    if not city:
+        city_value = MISSING_MARKER
+    elif city in frequent_cities:
+        city_value = city
+    else:
+        city_value = "__rare_city__"
+
+    hour_sin, hour_cos = hour_components(row.get("datetime"))
+    return {
+        "city": city_value,
+        "shape": encode_shape(row.get("shape"), frequent_shapes),
+        "hour_sin": hour_sin,
+        "hour_cos": hour_cos,
+    }
+
+
+def train_phase_twelve(rows: list[dict[str, Any]]) -> PhaseTwelveResult:
+    from collections import Counter
+
+    from sklearn.feature_extraction import DictVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import precision_score, recall_score
+
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    frequent_cities = fit_frequent_cities(rows, train_indices)
+    frequent_shapes = fit_frequent_shapes(rows, train_indices)
+    train_features = [
+        phase_twelve_features(rows[index], frequent_cities, frequent_shapes)
+        for index in train_indices
+    ]
+    test_features = [
+        phase_twelve_features(rows[index], frequent_cities, frequent_shapes)
+        for index in test_indices
+    ]
+    train_labels = [int(rows[index]["is_hoax"]) for index in train_indices]
+    test_labels = [int(rows[index]["is_hoax"]) for index in test_indices]
+
+    vectorizer = DictVectorizer(sparse=True)
+    train_matrix = vectorizer.fit_transform(train_features)
+    test_matrix = vectorizer.transform(test_features)
+    train_matrix.indices = train_matrix.indices.astype("int32", copy=False)
+    train_matrix.indptr = train_matrix.indptr.astype("int32", copy=False)
+    test_matrix.indices = test_matrix.indices.astype("int32", copy=False)
+    test_matrix.indptr = test_matrix.indptr.astype("int32", copy=False)
+
+    classifier = LogisticRegression(
+        class_weight="balanced",
+        max_iter=500,
+        solver="liblinear",
+        random_state=MODEL_RANDOM_STATE,
+    )
+    classifier.fit(train_matrix, train_labels)
+    predictions = classifier.predict(test_matrix)
+
+    city_counts = Counter(normalized_text(row.get("city")) for row in rows)
+    raw_city_count = sum(1 for city in city_counts if city)
+    raw_shapes = {normalized_text(row.get("shape")) for row in rows if normalized_text(row.get("shape"))}
+    canonical_shapes = {canonical_shape(row.get("shape")) for row in rows}
+    canonical_shapes.discard(MISSING_MARKER)
+    has_rare_shape = any(shape not in frequent_shapes for shape in canonical_shapes)
+
+    before_width = raw_city_count + len(raw_shapes) + 24
+    return PhaseTwelveResult(
+        before_width=before_width,
+        after_width=len(vectorizer.get_feature_names_out()),
+        city_rule=f"garder les villes presentes au moins {CITY_MIN_COUNT} fois dans l'apprentissage",
+        shape_rule=(
+            "fusionner changed/changing et round/circle, puis regrouper les formes presentes "
+            f"moins de {SHAPE_MIN_COUNT} fois dans l'apprentissage"
+        ),
+        singleton_city_count=sum(1 for city, count in city_counts.items() if city and count == 1),
+        kept_city_count=len(frequent_cities),
+        raw_shape_count=len(raw_shapes),
+        normalized_shape_count=len(frequent_shapes) + int(has_rare_shape),
+        distance_23_to_0=hour_distance(23, 0),
+        distance_23_to_20=hour_distance(23, 20),
+        recall=recall_score(test_labels, predictions, zero_division=0),
+        precision=precision_score(test_labels, predictions, zero_division=0),
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -1237,6 +1397,22 @@ def print_phase_eleven(result: PhaseElevenResult) -> None:
         )
 
 
+def print_phase_twelve(result: PhaseTwelveResult) -> None:
+    print()
+    print("Phase 12 - La ville et l'heure")
+    print(f"Largeur avant traitement : {result.before_width} colonnes")
+    print(f"Largeur apres traitement : {result.after_width} colonnes")
+    print(f"Regle villes : {result.city_rule}")
+    print(f"Villes gardees : {result.kept_city_count}")
+    print(f"Villes presentes une seule fois : {result.singleton_city_count}")
+    print(f"Regle formes : {result.shape_rule}")
+    print(f"Formes brutes non vides : {result.raw_shape_count}")
+    print(f"Formes restantes non vides : {result.normalized_shape_count}")
+    print(f"Distance 23h-0h : {result.distance_23_to_0:.3f}")
+    print(f"Distance 23h-20h : {result.distance_23_to_20:.3f}")
+    print(f"Scores avec ville, forme et heure : rappel {result.recall * 100:.1f}, precision {result.precision * 100:.1f}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -1282,6 +1458,9 @@ def main() -> int:
 
     phase_eleven = train_phase_eleven(phase_two.typed_rows)
     print_phase_eleven(phase_eleven)
+
+    phase_twelve = train_phase_twelve(phase_two.typed_rows)
+    print_phase_twelve(phase_twelve)
     return 0
 
 

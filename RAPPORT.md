@@ -231,8 +231,36 @@ Trois durees les plus longues :
 
 Je garde ces valeurs dans le comptage des durees superieures a une journee, parce qu'elles existent dans le fichier. Par contre, je les exclus de la mediane : elles ressemblent souvent a une periode de phenomenes repetes ou a une saisie aberrante, pas a une seule observation continue. Sinon, quelques valeurs enormes peuvent tirer la statistique centrale dans une direction peu defendable.
 
+## Phase 12 - La ville et l'heure
+
+Pour utiliser la ville sans fabriquer un tableau absurde, je garde seulement les villes presentes au moins 20 fois dans l'apprentissage ; toutes les autres villes deviennent `__rare_city__`. Cette liste est apprise apres la decoupe temporelle, uniquement sur l'apprentissage.
+
+Largeur du tableau :
+
+| Version | Colonnes |
+| --- | ---: |
+| Avant traitement : ville brute + forme brute + heure brute | 22 071 |
+| Apres traitement : villes frequentes + formes traitees + heure cyclique | 522 |
+
+Dans toute la transmission, 14 177 villes n'apparaissent qu'une seule fois. Les garder chacune dans une colonne separee pousserait le modele a apprendre par coeur des cas qu'il ne reverra probablement jamais.
+
+Pour l'heure, je n'utilise pas un nombre de 0 a 23. Je l'encode sur un cercle avec deux valeurs, sinus et cosinus. Les distances obtenues sont :
+
+| Comparaison | Distance dans l'encodage |
+| --- | ---: |
+| 23h - 0h | 0,261 |
+| 23h - 20h | 0,765 |
+
+Cette fois, 23h est bien plus proche de 0h que de 20h, ce qui correspond a la realite d'un cycle journalier.
+
+Pour `shape`, il y a 29 formes non vides au depart. Je fusionne `changed` avec `changing`, `round` avec `circle`, puis je regroupe les formes presentes moins de 20 fois dans l'apprentissage en `__rare_shape__`. Il reste 22 formes non vides apres traitement, plus le marqueur `__missing__` pour les formes absentes.
+
+Le modele de cette phase utilise seulement la ville traitee, la forme traitee et l'heure cyclique, toujours avec la decoupe temporelle. Il attrape 48,5 canulars sur 100 vrais canulars, mais sa precision tombe a 1,1 vrai canular sur 100 signalements marques. Le rappel monte parce que le modele signale beaucoup plus de dossiers ; ce n'est pas une amelioration globale, c'est surtout une preuve que ces variables bougent le comportement du systeme.
+
+Aucun encodage de cette phase n'utilise la cible `is_hoax`. Les listes de villes et de formes gardees sont apprises sur l'apprentissage seul.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 11 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, et la duree doit etre reconstruite sans effacer les contradictions.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 12 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, et les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur.
