@@ -204,8 +204,35 @@ Scores apres correction de la chaine, sur le test temporel :
 
 Ces chiffres sont bas, mais ils sont plus honnetes : le vocabulaire du modele n'a pas ete appris sur les releves du test.
 
+## Phase 11 - Combien de temps ca a dure
+
+Je construis une duree numerique finale sans supprimer de ligne. Je pars de `duration_seconds` quand elle est exploitable, puis j'utilise `duration_hours_min` pour recuperer des cas que la colonne numerique a rates, par exemple les fractions ou les durees ecrites avec des mots.
+
+- Releves dont la duree reste inutilisable apres traitement : 3
+- Releves ou les deux colonnes de duree se contredisent : 1 529
+- Duree mediane retenue : 120 secondes
+- Releves qui annoncent plus d'une journee d'observation : 208
+
+Exemples ou les deux colonnes ne racontent pas la meme chose :
+
+| Ligne | `duration_seconds` | `duration_hours_min` interprete | Texte brut |
+| ---: | ---: | ---: | --- |
+| 4 | 20 | 1 800 | `1/2 hour` |
+| 10 | 120 | 240 | `several minutes` |
+| 23 | 1 200 | 3 600 | `one hour?` |
+
+Trois durees les plus longues :
+
+| Ligne | Duree retenue | Texte brut | Decision |
+| ---: | ---: | --- | --- |
+| 610 | 97 836 000 s | `31 years` | gardee comme valeur extreme, exclue de la mediane |
+| 59 367 | 82 800 000 s | `23000hrs` | gardee comme valeur extreme, exclue de la mediane |
+| 82 653 | 66 276 000 s | `21 years` | gardee comme valeur extreme, exclue de la mediane |
+
+Je garde ces valeurs dans le comptage des durees superieures a une journee, parce qu'elles existent dans le fichier. Par contre, je les exclus de la mediane : elles ressemblent souvent a une periode de phenomenes repetes ou a une saisie aberrante, pas a une seule observation continue. Sinon, quelques valeurs enormes peuvent tirer la statistique centrale dans une direction peu defendable.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 10 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, et le vocabulaire du modele doit etre appris uniquement sur l'apprentissage.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 11 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, et la duree doit etre reconstruite sans effacer les contradictions.

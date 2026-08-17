@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import statistics
 import re
 import sys
 import urllib.error
@@ -165,6 +166,32 @@ class PhaseTenResult:
     single_prediction: int
     single_prediction_label: str
     single_report_text: str
+
+
+@dataclass(frozen=True)
+class LongDurationExample:
+    line_number: int
+    duration_seconds: float
+    duration_text: str
+    comments: str
+
+
+@dataclass(frozen=True)
+class DurationConflictExample:
+    line_number: int
+    numeric_seconds: float | None
+    text_seconds: float | None
+    duration_text: str
+
+
+@dataclass(frozen=True)
+class PhaseElevenResult:
+    unusable_count: int
+    conflict_count: int
+    median_seconds: float
+    longer_than_day_count: int
+    longest_examples: list[LongDurationExample]
+    conflict_examples: list[DurationConflictExample]
 
 
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
@@ -797,6 +824,215 @@ def train_phase_ten(rows: list[dict[str, Any]]) -> PhaseTenResult:
     )
 
 
+NUMBER_WORDS = {
+    "a": 1.0,
+    "an": 1.0,
+    "one": 1.0,
+    "two": 2.0,
+    "three": 3.0,
+    "four": 4.0,
+    "five": 5.0,
+    "six": 6.0,
+    "seven": 7.0,
+    "eight": 8.0,
+    "nine": 9.0,
+    "ten": 10.0,
+    "few": 3.0,
+    "couple": 2.0,
+    "several": 4.0,
+    "half": 0.5,
+}
+
+UNIT_SECONDS = {
+    "sec": 1.0,
+    "secs": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "min": 60.0,
+    "mins": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+    "hr": 3600.0,
+    "hrs": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
+    "day": 86400.0,
+    "days": 86400.0,
+    "week": 604800.0,
+    "weeks": 604800.0,
+    "month": 2629800.0,
+    "months": 2629800.0,
+    "year": 31557600.0,
+    "years": 31557600.0,
+}
+
+
+def parse_duration_text(value: Any) -> float | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+
+    text = text.replace("&#39", "'")
+    text = text.replace("&quot;", " ")
+    text = text.replace("`", "")
+    text = re.sub(r"[(),;]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    unknown_markers = ["unknown", "ongoing", "still", "not sure", "?", "n/a"]
+    if text in unknown_markers or any(marker in text for marker in ["ongoing", "still going"]):
+        return None
+
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*"
+        r"(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)",
+        text,
+    )
+    if match:
+        numerator = float(match.group(1))
+        denominator = float(match.group(2))
+        unit = normalize_duration_unit(match.group(3))
+        if denominator:
+            return (numerator / denominator) * UNIT_SECONDS[unit]
+
+    compact = text.replace(" ", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(sec|secs|min|mins|hr|hrs|hour|hours|minute|minutes|second|seconds)", compact)
+    if match:
+        low = float(match.group(1))
+        high = float(match.group(2))
+        return ((low + high) / 2.0) * UNIT_SECONDS[match.group(3)]
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(sec|secs|min|mins|hr|hrs|hour|hours|minute|minutes|second|seconds|day|days|week|weeks|month|months|year|years)", compact)
+    if match:
+        return float(match.group(1)) * UNIT_SECONDS[match.group(2)]
+
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*"
+        r"(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)",
+        text,
+    )
+    if match:
+        low = float(match.group(1))
+        high = float(match.group(2))
+        unit = normalize_duration_unit(match.group(3))
+        return ((low + high) / 2.0) * UNIT_SECONDS[unit]
+
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*"
+        r"(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)",
+        text,
+    )
+    if match:
+        amount = float(match.group(1))
+        unit = normalize_duration_unit(match.group(2))
+        return amount * UNIT_SECONDS[unit]
+
+    match = re.search(
+        r"(one|two|three|four|five|six|seven|eight|nine|ten|few|couple|several|half)\s+"
+        r"(seconds?|minutes?|hours?|days?|weeks?|months?|years?)",
+        text,
+    )
+    if match:
+        amount = NUMBER_WORDS[match.group(1)]
+        unit = normalize_duration_unit(match.group(2))
+        return amount * UNIT_SECONDS[unit]
+
+    if text == "seconds":
+        return None
+
+    return None
+
+
+def normalize_duration_unit(unit: str) -> str:
+    unit = unit.lower()
+    if unit.startswith("sec"):
+        return "seconds"
+    if unit.startswith("min"):
+        return "minutes"
+    if unit.startswith("hr"):
+        return "hours"
+    if unit.startswith("hour"):
+        return "hours"
+    if unit.startswith("day"):
+        return "days"
+    if unit.startswith("week"):
+        return "weeks"
+    if unit.startswith("month"):
+        return "months"
+    if unit.startswith("year"):
+        return "years"
+    return unit
+
+
+def choose_duration_seconds(row: dict[str, Any]) -> float | None:
+    numeric = row.get("duration_seconds")
+    text_seconds = parse_duration_text(row.get("duration_hours_min"))
+
+    if text_seconds is not None and (numeric is None or numeric == 0):
+        return text_seconds
+    if numeric is not None:
+        return float(numeric)
+    return text_seconds
+
+
+def durations_conflict(numeric: float | None, text_seconds: float | None) -> bool:
+    if numeric is None or text_seconds is None:
+        return False
+    if numeric == 0 and text_seconds > 0:
+        return True
+    tolerance = max(60.0, 0.25 * max(abs(numeric), abs(text_seconds)))
+    return abs(numeric - text_seconds) > tolerance
+
+
+def train_phase_eleven(rows: list[dict[str, Any]]) -> PhaseElevenResult:
+    usable_durations: list[float] = []
+    durations_for_median: list[float] = []
+    conflicts: list[DurationConflictExample] = []
+    longest_candidates: list[LongDurationExample] = []
+
+    for row in rows:
+        numeric = row.get("duration_seconds")
+        numeric_seconds = float(numeric) if numeric is not None else None
+        text_seconds = parse_duration_text(row.get("duration_hours_min"))
+        chosen = choose_duration_seconds(row)
+
+        if chosen is not None:
+            usable_durations.append(chosen)
+            if chosen <= 86400:
+                durations_for_median.append(chosen)
+            longest_candidates.append(
+                LongDurationExample(
+                    line_number=int(row["_line_number"]),
+                    duration_seconds=chosen,
+                    duration_text=str(row.get("duration_hours_min", "")),
+                    comments=str(row.get("comments", ""))[:120],
+                )
+            )
+
+        if durations_conflict(numeric_seconds, text_seconds):
+            conflicts.append(
+                DurationConflictExample(
+                    line_number=int(row["_line_number"]),
+                    numeric_seconds=numeric_seconds,
+                    text_seconds=text_seconds,
+                    duration_text=str(row.get("duration_hours_min", "")),
+                )
+            )
+
+    longest_examples = sorted(
+        longest_candidates,
+        key=lambda item: item.duration_seconds,
+        reverse=True,
+    )[:3]
+    return PhaseElevenResult(
+        unusable_count=len(rows) - len(usable_durations),
+        conflict_count=len(conflicts),
+        median_seconds=statistics.median(durations_for_median),
+        longer_than_day_count=sum(1 for duration in usable_durations if duration > 86400),
+        longest_examples=longest_examples,
+        conflict_examples=conflicts[:3],
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -980,6 +1216,27 @@ def print_phase_ten(result: PhaseTenResult) -> None:
     print(f"Prediction sortie : {result.single_prediction} ({result.single_prediction_label})")
 
 
+def print_phase_eleven(result: PhaseElevenResult) -> None:
+    print()
+    print("Phase 11 - Combien de temps ca a dure")
+    print(f"Durees inutilisables apres traitement : {result.unusable_count}")
+    print(f"Durees contradictoires entre les deux colonnes : {result.conflict_count}")
+    print(f"Duree mediane retenue : {result.median_seconds:.1f} secondes")
+    print(f"Releves annoncant plus d'une journee : {result.longer_than_day_count}")
+    print("Exemples de contradictions :")
+    for item in result.conflict_examples:
+        print(
+            f"  - ligne {item.line_number}: numeric={item.numeric_seconds}, "
+            f"texte={item.text_seconds}, brut={item.duration_text!r}"
+        )
+    print("Trois durees les plus longues :")
+    for item in result.longest_examples:
+        print(
+            f"  - ligne {item.line_number}: {item.duration_seconds:.0f} secondes, "
+            f"texte={item.duration_text!r}, commentaire={item.comments}"
+        )
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -1022,6 +1279,9 @@ def main() -> int:
 
     phase_ten = train_phase_ten(phase_two.typed_rows)
     print_phase_ten(phase_ten)
+
+    phase_eleven = train_phase_eleven(phase_two.typed_rows)
+    print_phase_eleven(phase_eleven)
     return 0
 
 
