@@ -10,7 +10,7 @@ La consigne donne une URL avec le nom `ufo-completegeocoded-time-standardized.cs
 - Lignes chargees normalement : 88 679
 - Lignes traitees a part : 196
 
-Les lignes mises a part ont 12 champs au lieu des 11 attendus par le manifeste. Elles ne sont pas supprimees : elles sont conservees dans une liste d'anomalies pour inspection. Le probleme observe est un champ vide supplementaire qui decale ensuite les colonnes.
+Les lignes mises a part ont 12 champs au lieu des 11 attendus par le manifeste. Je ne les charge pas dans le tableau principal, parce que cela decalerait les colonnes. Elles sont gardees dans une liste d'anomalies pour inspection.
 
 Exemple de ligne problematique :
 
@@ -22,7 +22,7 @@ Cette ligne contient une case vide de trop avant le commentaire. Avec les onze c
 
 ## Phase 2 - Rien n'est du bon type
 
-Les 88 679 lignes bien formees de la phase 1 sont converties sans supprimer de ligne. Les valeurs impossibles a convertir restent dans le tableau avec une valeur `None`, et l'anomalie est comptee a part. Pour `datetime`, les heures ecrites `24:00` sont signalees puis normalisees au lendemain a `00:00`, car Python ne les accepte pas comme heure valide.
+Les 88 679 lignes bien formees de la phase 1 sont converties sans supprimer de ligne. Quand une valeur ne passe pas, je garde la ligne et je mets `None` dans la valeur convertie. Pour `datetime`, les heures ecrites `24:00` sont signalees puis normalisees au lendemain a `00:00`, car Python ne les accepte pas comme heure valide.
 
 Comptes par champ converti :
 
@@ -63,7 +63,7 @@ Resultats sur le jeu de test :
 - Sur 100 canulars reellement presents, le modele en attrape 99,5
 - Sur 100 releves que le modele signale, 100,0 sont vraiment marques comme canulars
 
-Ce premier verdict est tres fort, mais il faut deja se mefier : l'etiquette de la phase 3 vient du texte `comments`, et le modele lit aussi `comments`. La phase suivante doit verifier si ce champ etait vraiment disponible au bon moment.
+Ce premier verdict est tres fort, mais il faut deja se mefier : l'etiquette de la phase 3 vient du texte `comments`, et le modele lit aussi `comments`. C'est utile pour un premier essai, mais ce n'est pas encore une preuve solide.
 
 ## Phase 5 - Le Conseil ne vous croit pas
 
@@ -105,3 +105,9 @@ Scores sur le meme jeu de test que les phases 4 et 5 :
 | Modele corrige | 96,77 % | 13,9 | 4,9 |
 
 Le taux de bonnes reponses du stagiaire est eleve parce que les canulars sont tres rares : seulement 201 cas dans les 22 170 releves du test. Dire toujours `pas canular` donne donc presque toujours la bonne reponse, mais ne trouve strictement aucun canular. Pour defendre mon travail, je presente le rappel des canulars, parce que c'est la mesure qui repond a la vraie question du Conseil : combien de canulars le systeme arrive a attraper.
+
+## Conclusion
+
+J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores finaux. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
+
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun.
