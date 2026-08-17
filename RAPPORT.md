@@ -39,3 +39,13 @@ Anomalies observees :
 - Duree numerique invalide : 3 valeurs de `duration_seconds` contiennent un backtick, par exemple `2\``, `8\`` et `0.5\``. Origine probable : service de transmission ou normalisation de la duree, car la colonne est censee etre numerique.
 - Duree numerique manquante : 2 valeurs vides dans `duration_seconds`, alors que `duration_hours_min` contient du texte comme `1/3200` ou `1&#39`. Origine probable : temoin pour la duree textuelle ambigue, puis service de normalisation incapable de produire un nombre.
 - Latitude invalide : 1 valeur `33q.200088` dans `latitude`. Origine probable : capteur/geocodage ou service de transmission, car une coordonnee numerique contient une lettre.
+
+## Phase 3 - Le Conseil veut trier les canulars
+
+Regle choisie : je marque un releve comme canular si le champ `comments` contient le mot `hoax`.
+
+- Releves marques comme canulars : 802
+- Total utilise : 88 679 releves charges normalement
+- Proportion : 0,904 %
+
+Cette regle attrape surtout les signalements deja accompagnes d'une note editoriale du type `Possible hoax`. Elle peut donc attraper a tort des cas seulement suspects, pas confirmes. Elle rate aussi tous les canulars qui n'utilisent pas explicitement le mot `hoax` dans le commentaire.

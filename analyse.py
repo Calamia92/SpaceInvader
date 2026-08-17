@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -61,6 +62,14 @@ class ConversionIssue:
 class PhaseTwoResult:
     typed_rows: list[dict[str, Any]]
     issues: list[ConversionIssue]
+
+
+@dataclass(frozen=True)
+class PhaseThreeResult:
+    hoax_count: int
+    total_rows: int
+    proportion: float
+    examples: list[dict[str, Any]]
 
 
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
@@ -198,6 +207,34 @@ def convert_phase_two(rows: list[dict[str, str | int]]) -> PhaseTwoResult:
     return PhaseTwoResult(typed_rows=typed_rows, issues=issues)
 
 
+HOAX_PATTERN = re.compile(r"\bhoax(?:es|ed)?\b", re.IGNORECASE)
+
+
+def is_hoax_from_comment(comment: str) -> bool:
+    return HOAX_PATTERN.search(comment) is not None
+
+
+def label_phase_three(rows: list[dict[str, Any]]) -> PhaseThreeResult:
+    examples: list[dict[str, Any]] = []
+    hoax_count = 0
+
+    for row in rows:
+        row["is_hoax"] = is_hoax_from_comment(str(row["comments"]))
+        if row["is_hoax"]:
+            hoax_count += 1
+            if len(examples) < 3:
+                examples.append(row)
+
+    total_rows = len(rows)
+    proportion = hoax_count / total_rows if total_rows else 0.0
+    return PhaseThreeResult(
+        hoax_count=hoax_count,
+        total_rows=total_rows,
+        proportion=proportion,
+        examples=examples,
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -237,6 +274,20 @@ def print_phase_two(result: PhaseTwoResult) -> None:
             print(f"  - ligne {issue.line_number}: {issue.value!r} ({issue.reason})")
 
 
+def print_phase_three(result: PhaseThreeResult) -> None:
+    print()
+    print("Phase 3 - Le Conseil veut trier les canulars")
+    print("Regle : le commentaire contient le mot 'hoax'.")
+    print(f"Canulars marques : {result.hoax_count} / {result.total_rows}")
+    print(f"Proportion : {result.proportion:.3%}")
+
+    if result.examples:
+        print("Exemples :")
+        for row in result.examples:
+            comment = str(row["comments"])
+            print(f"  - ligne {row['_line_number']}: {comment[:120]}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -255,6 +306,9 @@ def main() -> int:
     well_formed_rows = load_well_formed_rows()
     phase_two = convert_phase_two(well_formed_rows)
     print_phase_two(phase_two)
+
+    phase_three = label_phase_three(phase_two.typed_rows)
+    print_phase_three(phase_three)
     return 0
 
 
