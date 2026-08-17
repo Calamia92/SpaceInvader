@@ -141,6 +141,21 @@ class PhaseEightResult:
     corrected_temporal: PhaseFourResult
 
 
+@dataclass(frozen=True)
+class MissingColumnStats:
+    column: str
+    missing_count: int
+    filled_count: int
+    missing_hoax_proportion: float
+    filled_hoax_proportion: float
+
+
+@dataclass(frozen=True)
+class PhaseNineResult:
+    top_columns: list[MissingColumnStats]
+    treatment: str
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -279,6 +294,7 @@ def convert_phase_two(rows: list[dict[str, str | int]]) -> PhaseTwoResult:
 HOAX_PATTERN = re.compile(r"\bhoax(?:es|ed)?\b", re.IGNORECASE)
 MODEL_RANDOM_STATE = 42
 TEST_SIZE = 0.25
+MISSING_MARKER = "__missing__"
 
 
 def is_hoax_from_comment(comment: str) -> bool:
@@ -312,7 +328,9 @@ def row_to_text(row: dict[str, Any], columns: list[str]) -> str:
         value = row.get(column)
         if isinstance(value, datetime):
             value = value.isoformat(sep=" ")
-        values.append(f"{column}={'' if value is None else value}")
+        if value is None or str(value).strip() == "":
+            value = MISSING_MARKER
+        values.append(f"{column}={value}")
     return " | ".join(values)
 
 
@@ -677,6 +695,47 @@ def train_phase_eight(rows: list[dict[str, Any]]) -> PhaseEightResult:
     )
 
 
+def is_missing_value(value: Any) -> bool:
+    return value is None or str(value).strip() == ""
+
+
+def train_phase_nine(rows: list[dict[str, Any]]) -> PhaseNineResult:
+    stats: list[MissingColumnStats] = []
+    excluded_columns = {"is_hoax", "_line_number"}
+    columns = [column for column in rows[0] if column not in excluded_columns]
+
+    for column in columns:
+        missing_labels: list[int] = []
+        filled_labels: list[int] = []
+        for row in rows:
+            target = int(row["is_hoax"])
+            if is_missing_value(row.get(column)):
+                missing_labels.append(target)
+            else:
+                filled_labels.append(target)
+
+        if not missing_labels:
+            continue
+
+        stats.append(
+            MissingColumnStats(
+                column=column,
+                missing_count=len(missing_labels),
+                filled_count=len(filled_labels),
+                missing_hoax_proportion=sum(missing_labels) / len(missing_labels),
+                filled_hoax_proportion=sum(filled_labels) / len(filled_labels) if filled_labels else 0.0,
+            )
+        )
+
+    top_columns = sorted(stats, key=lambda item: item.missing_count, reverse=True)[:3]
+    return PhaseNineResult(
+        top_columns=top_columns,
+        treatment=(
+            f"conserver toutes les lignes et encoder chaque trou avec le marqueur {MISSING_MARKER}"
+        ),
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -832,6 +891,18 @@ def print_phase_eight(result: PhaseEightResult) -> None:
     )
 
 
+def print_phase_nine(result: PhaseNineResult) -> None:
+    print()
+    print("Phase 9 - Les cases vides")
+    for item in result.top_columns:
+        print(
+            f"{item.column}: {item.missing_count} trous, "
+            f"canulars si vide {item.missing_hoax_proportion * 100:.3f}%, "
+            f"canulars si rempli {item.filled_hoax_proportion * 100:.3f}%"
+        )
+    print(f"Traitement retenu : {result.treatment}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -868,6 +939,9 @@ def main() -> int:
 
     phase_eight = train_phase_eight(phase_two.typed_rows)
     print_phase_eight(phase_eight)
+
+    phase_nine = train_phase_nine(phase_two.typed_rows)
+    print_phase_nine(phase_nine)
     return 0
 
 

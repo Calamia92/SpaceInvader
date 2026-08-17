@@ -102,7 +102,7 @@ Scores sur le meme jeu de test que les phases 4 et 5 :
 | Systeme | Taux de bonnes reponses | Canulars attrapes sur 100 vrais canulars | Vrais canulars sur 100 signalements marques |
 | --- | ---: | ---: | ---: |
 | Stagiaire | 99,09 % | 0,0 | 0,0 |
-| Modele corrige | 96,77 % | 13,9 | 4,9 |
+| Modele corrige | 96,79 % | 13,9 | 4,9 |
 
 Le taux de bonnes reponses du stagiaire est eleve parce que les canulars sont tres rares : seulement 201 cas dans les 22 170 releves du test. Dire toujours `pas canular` donne donc presque toujours la bonne reponse, mais ne trouve strictement aucun canular. Pour defendre mon travail, je presente le rappel des canulars, parce que c'est la mesure qui repond a la vraie question du Conseil : combien de canulars le systeme arrive a attraper.
 
@@ -162,8 +162,24 @@ Scores apres decoupe temporelle :
 
 Le modele avec `comments` reste parfait, mais ce n'est toujours pas rassurant : il lit encore la colonne qui contient le mot ayant servi a fabriquer l'etiquette. Le modele corrige, lui, tombe fortement avec l'ordre temporel. C'est le signe que la decoupe aleatoire donnait une vision trop optimiste.
 
+## Phase 9 - Les cases vides
+
+J'ai pris les trois colonnes les plus trouees et j'ai compare la proportion de canulars quand la case est vide avec la proportion quand elle est remplie.
+
+| Colonne | Cases vides | Canulars si vide | Cases remplies | Canulars si rempli |
+| --- | ---: | ---: | ---: | ---: |
+| `country` | 12 365 | 1,156 % | 76 314 | 0,864 % |
+| `state` | 7 409 | 1,296 % | 81 270 | 0,869 % |
+| `duration_hours_min` | 3 017 | 2,353 % | 85 662 | 0,853 % |
+
+Les trous ne se comportent pas exactement comme les cases remplies. Le cas le plus net est `duration_hours_min` : les releves sans duree ecrite par le temoin ont une proportion de canulars beaucoup plus haute.
+
+Traitement retenu : je ne jette pas ces lignes et je ne remplace pas les trous par la valeur la plus frequente. Dans les variables donnees au modele, un trou devient le marqueur explicite `__missing__`.
+
+Ce traitement ne detruit pas ce que je viens de mesurer, parce que le modele peut toujours voir qu'une case etait vide. Par exemple, `country=__missing__` reste different de `country=us`.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 et 8 ajoutent deux corrections : un meme evenement ne doit plus etre coupe entre apprentissage et test, et le test doit porter sur des dossiers plus recents que ceux utilises pour apprendre.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7, 8 et 9 ajoutent trois corrections : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents que ceux utilises pour apprendre, et les cases vides doivent rester visibles.
