@@ -49,3 +49,18 @@ Regle choisie : je marque un releve comme canular si le champ `comments` contien
 - Proportion : 0,904 %
 
 Cette regle attrape surtout les signalements deja accompagnes d'une note editoriale du type `Possible hoax`. Elle peut donc attraper a tort des cas seulement suspects, pas confirmes. Elle rate aussi tous les canulars qui n'utilisent pas explicitement le mot `hoax` dans le commentaire.
+
+## Phase 4 - Le premier verdict
+
+Modele utilise : `CountVectorizer` puis `LogisticRegression`, entraine uniquement sur la colonne `comments`.
+
+J'ai separe les releves en deux groupes avec `train_test_split`, en gardant la meme proportion de canulars dans les deux groupes (`stratify`). Le modele apprend sur 66 509 releves et il est teste sur 22 170 releves qu'il n'a pas vus pendant l'apprentissage. Le tirage est fixe avec `random_state=42`. Exemples de lignes presentes dans le jeu de test : 11 622, 26 322, 27 726, 28 929, 41 909, 46 519, 49 620, 67 787, 87 320, 88 615.
+
+Resultats sur le jeu de test :
+
+- Canulars reels dans le test : 201
+- Signalements marques comme canulars par le modele : 200
+- Sur 100 canulars reellement presents, le modele en attrape 99,5
+- Sur 100 releves que le modele signale, 100,0 sont vraiment marques comme canulars
+
+Ce premier verdict est tres fort, mais il faut deja se mefier : l'etiquette de la phase 3 vient du texte `comments`, et le modele lit aussi `comments`. La phase suivante doit verifier si ce champ etait vraiment disponible au bon moment.

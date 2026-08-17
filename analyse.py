@@ -72,6 +72,20 @@ class PhaseThreeResult:
     examples: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class PhaseFourResult:
+    model_name: str
+    used_columns: list[str]
+    train_size: int
+    test_size: int
+    test_hoax_count: int
+    predicted_hoax_count: int
+    recall: float
+    precision: float
+    accuracy: float
+    test_line_examples: list[int]
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -235,6 +249,71 @@ def label_phase_three(rows: list[dict[str, Any]]) -> PhaseThreeResult:
     )
 
 
+def train_phase_four(rows: list[dict[str, Any]]) -> PhaseFourResult:
+    from sklearn.feature_extraction.text import CountVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import accuracy_score, precision_score, recall_score
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import Pipeline
+
+    comments = [str(row["comments"]) for row in rows]
+    labels = [int(row["is_hoax"]) for row in rows]
+    line_numbers = [int(row["_line_number"]) for row in rows]
+
+    (
+        comments_train,
+        comments_test,
+        labels_train,
+        labels_test,
+        _lines_train,
+        lines_test,
+    ) = train_test_split(
+        comments,
+        labels,
+        line_numbers,
+        test_size=0.25,
+        random_state=42,
+        stratify=labels,
+    )
+
+    model = Pipeline(
+        [
+            (
+                "vectorizer",
+                CountVectorizer(
+                    lowercase=True,
+                    token_pattern=r"(?u)\b\w+\b",
+                    ngram_range=(1, 2),
+                ),
+            ),
+            (
+                "classifier",
+                LogisticRegression(
+                    class_weight="balanced",
+                    max_iter=500,
+                    solver="liblinear",
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
+    model.fit(comments_train, labels_train)
+    predictions = model.predict(comments_test)
+
+    return PhaseFourResult(
+        model_name="CountVectorizer + LogisticRegression",
+        used_columns=["comments"],
+        train_size=len(labels_train),
+        test_size=len(labels_test),
+        test_hoax_count=sum(labels_test),
+        predicted_hoax_count=int(sum(predictions)),
+        recall=recall_score(labels_test, predictions, zero_division=0),
+        precision=precision_score(labels_test, predictions, zero_division=0),
+        accuracy=accuracy_score(labels_test, predictions),
+        test_line_examples=sorted(lines_test[:10]),
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -288,6 +367,21 @@ def print_phase_three(result: PhaseThreeResult) -> None:
             print(f"  - ligne {row['_line_number']}: {comment[:120]}")
 
 
+def print_phase_four(result: PhaseFourResult) -> None:
+    print()
+    print("Phase 4 - Le premier verdict")
+    print(f"Modele : {result.model_name}")
+    print(f"Colonnes utilisees : {', '.join(result.used_columns)}")
+    print(f"Apprentissage : {result.train_size} releves")
+    print(f"Test jamais vu : {result.test_size} releves")
+    print(f"Canulars reels dans le test : {result.test_hoax_count}")
+    print(f"Signalements marques par le modele : {result.predicted_hoax_count}")
+    print(f"Canulars attrapes sur 100 canulars reels : {result.recall * 100:.1f}")
+    print(f"Vrais canulars sur 100 signalements marques : {result.precision * 100:.1f}")
+    print(f"Taux de bonnes reponses : {result.accuracy * 100:.2f}%")
+    print(f"Exemples de lignes du jeu de test : {result.test_line_examples}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -309,6 +403,9 @@ def main() -> int:
 
     phase_three = label_phase_three(phase_two.typed_rows)
     print_phase_three(phase_three)
+
+    phase_four = train_phase_four(phase_two.typed_rows)
+    print_phase_four(phase_four)
     return 0
 
 
