@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import math
+import random
 import statistics
 import re
 import sys
@@ -299,6 +300,54 @@ class PhaseFifteenResult:
     analyst_second: float
     analyst_gap: float
     answer: str
+
+
+@dataclass(frozen=True)
+class TrainedPhaseTwelveModel:
+    vectorizer: Any
+    classifier: Any
+    frequent_cities: set[str]
+    frequent_shapes: set[str]
+    test_indices: list[int]
+    labels: list[int]
+    probabilities: list[float]
+    predictions: list[int]
+    feature_count: int
+
+
+@dataclass(frozen=True)
+class LocalContribution:
+    feature: str
+    contribution: float
+
+
+@dataclass(frozen=True)
+class ExplainedReport:
+    role: str
+    line_number: int
+    probability: float
+    true_label: int
+    predicted_label: int
+    summary: str
+    positive_reasons: list[LocalContribution]
+    negative_reasons: list[LocalContribution]
+
+
+@dataclass(frozen=True)
+class ColumnImportance:
+    column: str
+    baseline_score: float
+    shuffled_score: float
+    drop: float
+
+
+@dataclass(frozen=True)
+class PhaseSixteenResult:
+    threshold_used_for_explanations: float
+    threshold_note: str
+    reports: list[ExplainedReport]
+    importances: list[ColumnImportance]
+    surprising_column_note: str
 
 
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
@@ -1218,17 +1267,11 @@ def phase_twelve_features(
     }
 
 
-def force_sparse_int32(matrix: Any) -> Any:
-    matrix.indices = matrix.indices.astype("int32", copy=False)
-    matrix.indptr = matrix.indptr.astype("int32", copy=False)
-    return matrix
-
-
-def phase_twelve_probability_output(
+def train_inspectable_phase_twelve_model(
     rows: list[dict[str, Any]],
     train_indices: list[int],
     test_indices: list[int],
-) -> ProbabilityOutput:
+) -> TrainedPhaseTwelveModel:
     from sklearn.feature_extraction import DictVectorizer
     from sklearn.linear_model import LogisticRegression
 
@@ -1248,7 +1291,6 @@ def phase_twelve_probability_output(
     vectorizer = DictVectorizer(sparse=True)
     train_matrix = force_sparse_int32(vectorizer.fit_transform(train_features))
     test_matrix = force_sparse_int32(vectorizer.transform(test_features))
-
     classifier = LogisticRegression(
         class_weight="balanced",
         max_iter=500,
@@ -1256,14 +1298,40 @@ def phase_twelve_probability_output(
         random_state=MODEL_RANDOM_STATE,
     )
     classifier.fit(train_matrix, train_labels)
-    predictions = classifier.predict(test_matrix)
     probabilities = classifier.predict_proba(test_matrix)[:, 1]
+    predictions = classifier.predict(test_matrix)
 
-    return ProbabilityOutput(
+    return TrainedPhaseTwelveModel(
+        vectorizer=vectorizer,
+        classifier=classifier,
+        frequent_cities=frequent_cities,
+        frequent_shapes=frequent_shapes,
+        test_indices=test_indices,
         labels=test_labels,
         probabilities=[float(probability) for probability in probabilities],
         predictions=[int(prediction) for prediction in predictions],
         feature_count=len(vectorizer.get_feature_names_out()),
+    )
+
+
+def force_sparse_int32(matrix: Any) -> Any:
+    matrix.indices = matrix.indices.astype("int32", copy=False)
+    matrix.indptr = matrix.indptr.astype("int32", copy=False)
+    return matrix
+
+
+def phase_twelve_probability_output(
+    rows: list[dict[str, Any]],
+    train_indices: list[int],
+    test_indices: list[int],
+) -> ProbabilityOutput:
+    trained = train_inspectable_phase_twelve_model(rows, train_indices, test_indices)
+
+    return ProbabilityOutput(
+        labels=trained.labels,
+        probabilities=trained.probabilities,
+        predictions=trained.predictions,
+        feature_count=trained.feature_count,
     )
 
 
@@ -1503,6 +1571,150 @@ def train_phase_fifteen(rows: list[dict[str, Any]], split_count: int = 20) -> Ph
         analyst_second=analyst_second,
         analyst_gap=analyst_gap,
         answer=answer,
+    )
+
+
+def report_summary(row: dict[str, Any]) -> str:
+    observed_at = row.get("datetime")
+    observed = observed_at.isoformat(sep=" ") if isinstance(observed_at, datetime) else "date inconnue"
+    return (
+        f"{observed} | city={row.get('city') or MISSING_MARKER} | "
+        f"state={row.get('state') or MISSING_MARKER} | "
+        f"country={row.get('country') or MISSING_MARKER} | "
+        f"shape={row.get('shape') or MISSING_MARKER}"
+    )
+
+
+def explain_report(
+    rows: list[dict[str, Any]],
+    trained: TrainedPhaseTwelveModel,
+    test_position: int,
+    role: str,
+) -> ExplainedReport:
+    row = rows[trained.test_indices[test_position]]
+    features = phase_twelve_features(row, trained.frequent_cities, trained.frequent_shapes)
+    matrix = trained.vectorizer.transform([features])
+    feature_names = trained.vectorizer.get_feature_names_out()
+    coefficients = trained.classifier.coef_[0]
+    contributions = [
+        LocalContribution(feature=feature_names[index], contribution=float(coefficients[index] * value))
+        for index, value in zip(matrix.indices, matrix.data, strict=True)
+    ]
+    positive_reasons = sorted(
+        [item for item in contributions if item.contribution > 0],
+        key=lambda item: item.contribution,
+        reverse=True,
+    )[:3]
+    negative_reasons = sorted(
+        [item for item in contributions if item.contribution < 0],
+        key=lambda item: item.contribution,
+    )[:3]
+
+    return ExplainedReport(
+        role=role,
+        line_number=int(row["_line_number"]),
+        probability=trained.probabilities[test_position],
+        true_label=trained.labels[test_position],
+        predicted_label=trained.predictions[test_position],
+        summary=report_summary(row),
+        positive_reasons=positive_reasons,
+        negative_reasons=negative_reasons,
+    )
+
+
+def choose_phase_sixteen_reports(
+    rows: list[dict[str, Any]],
+    trained: TrainedPhaseTwelveModel,
+    threshold: float,
+) -> list[ExplainedReport]:
+    predicted_positions = [
+        index
+        for index, probability in enumerate(trained.probabilities)
+        if probability >= threshold
+    ]
+    high_position = max(predicted_positions, key=lambda index: trained.probabilities[index])
+    boundary_position = min(predicted_positions, key=lambda index: trained.probabilities[index])
+    missed_positions = [
+        index
+        for index, (label, probability) in enumerate(zip(trained.labels, trained.probabilities, strict=True))
+        if label == 1 and probability < threshold
+    ]
+    missed_position = max(missed_positions, key=lambda index: trained.probabilities[index])
+
+    return [
+        explain_report(rows, trained, high_position, "marque canular avec forte confiance"),
+        explain_report(rows, trained, boundary_position, "marque canular juste au-dessus de 0,5"),
+        explain_report(rows, trained, missed_position, "canular laisse passer"),
+    ]
+
+
+def phase_sixteen_score(
+    rows: list[dict[str, Any]],
+    trained: TrainedPhaseTwelveModel,
+    damaged_column: str | None = None,
+) -> float:
+    from sklearn.metrics import average_precision_score
+
+    rng = random.Random(MODEL_RANDOM_STATE)
+    values = [rows[index].get("datetime" if damaged_column == "hour" else damaged_column) for index in trained.test_indices]
+    if damaged_column is not None:
+        rng.shuffle(values)
+
+    features: list[dict[str, float | str]] = []
+    for position, row_index in enumerate(trained.test_indices):
+        row = rows[row_index]
+        if damaged_column is None:
+            features.append(phase_twelve_features(row, trained.frequent_cities, trained.frequent_shapes))
+            continue
+
+        damaged_row = dict(row)
+        if damaged_column == "hour":
+            damaged_row["datetime"] = values[position]
+        else:
+            damaged_row[damaged_column] = values[position]
+        features.append(phase_twelve_features(damaged_row, trained.frequent_cities, trained.frequent_shapes))
+
+    matrix = force_sparse_int32(trained.vectorizer.transform(features))
+    probabilities = trained.classifier.predict_proba(matrix)[:, 1]
+    return float(average_precision_score(trained.labels, probabilities))
+
+
+def train_phase_sixteen(rows: list[dict[str, Any]]) -> PhaseSixteenResult:
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    trained = train_inspectable_phase_twelve_model(rows, train_indices, test_indices)
+    explanation_threshold = 0.5
+    reports = choose_phase_sixteen_reports(rows, trained, explanation_threshold)
+    baseline_score = phase_sixteen_score(rows, trained)
+    importances = []
+    for column in ["city", "shape", "hour"]:
+        shuffled_score = phase_sixteen_score(rows, trained, column)
+        importances.append(
+            ColumnImportance(
+                column=column,
+                baseline_score=baseline_score,
+                shuffled_score=shuffled_score,
+                drop=baseline_score - shuffled_score,
+            )
+        )
+    importances.sort(key=lambda item: item.drop, reverse=True)
+
+    top_column = importances[0].column
+    if top_column == "hour":
+        surprising_note = "l'heure arrive devant la ville, alors que la ville semblait etre la variable riche la plus evidente"
+    elif top_column == "shape":
+        surprising_note = "la forme pese plus que la ville, malgre le gros travail fait pour encoder les villes"
+    else:
+        surprising_note = "la ville reste premiere, mais sa chute reste faible au regard de ses 22 018 valeurs brutes"
+
+    return PhaseSixteenResult(
+        threshold_used_for_explanations=explanation_threshold,
+        threshold_note=(
+            "la frontiere metier de la phase 13 vaut 1,0 et ne marque aucun dossier ; "
+            "les explications locales utilisent donc le seuil technique 0,5 du modele brut"
+        ),
+        reports=reports,
+        importances=importances,
+        surprising_column_note=surprising_note,
     )
 
 
@@ -1795,6 +2007,35 @@ def print_phase_fifteen(result: PhaseFifteenResult) -> None:
     print(f"Reponse : {result.answer}")
 
 
+def print_contributions(title: str, contributions: list[LocalContribution]) -> None:
+    print(title)
+    for item in contributions:
+        print(f"    - {item.feature}: {item.contribution:+.3f}")
+
+
+def print_phase_sixteen(result: PhaseSixteenResult) -> None:
+    print()
+    print("Phase 16 - Trois dossiers sur le bureau")
+    print(f"Frontiere utilisee pour expliquer : {result.threshold_used_for_explanations:.1f}")
+    print(f"Note : {result.threshold_note}")
+    for report in result.reports:
+        print(f"  - {report.role}")
+        print(f"    ligne {report.line_number}: {report.summary}")
+        print(
+            f"    proba {report.probability * 100:.2f}%, "
+            f"vrai label {report.true_label}, prediction {report.predicted_label}"
+        )
+        print_contributions("    pousse vers canular :", report.positive_reasons)
+        print_contributions("    pousse vers pas canular :", report.negative_reasons)
+    print("Classement global par permutation :")
+    for item in result.importances:
+        print(
+            f"  - {item.column}: score base {item.baseline_score:.5f}, "
+            f"score melange {item.shuffled_score:.5f}, chute {item.drop:.5f}"
+        )
+    print(f"Colonne surprenante : {result.surprising_column_note}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -1853,6 +2094,9 @@ def main() -> int:
 
     phase_fifteen = train_phase_fifteen(phase_two.typed_rows)
     print_phase_fifteen(phase_fifteen)
+
+    phase_sixteen = train_phase_sixteen(phase_two.typed_rows)
+    print_phase_sixteen(phase_sixteen)
     return 0
 
 

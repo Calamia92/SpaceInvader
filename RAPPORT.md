@@ -346,8 +346,36 @@ Mon nombre principal n'est donc pas `54,0 %` de rappel, mais un rappel observe e
 
 Si deux analystes annoncent `0,31` et `0,34`, je ne deploie pas automatiquement le second. Leur ecart est de 0,03, alors que ma fourchette de rappel a une largeur de 0,129. Avec une incertitude de cette taille, ces deux chiffres peuvent raconter la meme performance mesuree sur deux decoupes differentes.
 
+## Phase 16 - Trois dossiers sur le bureau
+
+La frontiere metier de la phase 13 vaut `1,0`, donc elle ne marque aucun dossier comme canular. Pour expliquer le comportement du modele brut, j'utilise ici le seuil technique `0,5`. Ce seuil sert a comprendre le modele, pas a deployer la decision finale.
+
+Trois dossiers du test :
+
+| Role | Ligne | Proba modele | Vrai label | Prediction a 0,5 | Releve |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Marque canular avec forte confiance | 32 088 | 97,26 % | 0 | 1 | `2014-02-27 19:30:00`, Butler, IN, US, forme `unknown` |
+| Marque canular juste au-dessus de 0,5 | 86 623 | 50,00 % | 0 | 1 | `2011-09-28 22:15:00`, Sonoma, CA, US, forme `triangle` |
+| Canular laisse passer | 59 142 | 49,92 % | 1 | 0 | `2010-06-30 01:00:00`, Garberville, CA, US, forme manquante |
+
+Explications locales :
+
+- Ligne 32 088 : la ville `butler` pousse tres fortement vers canular (`+5,118`) et la forme `unknown` pousse aussi un peu dans ce sens (`+0,262`). L'heure pousse dans l'autre sens (`hour_sin = -0,347`, `hour_cos = -0,028`), mais pas assez pour compenser la ville.
+- Ligne 86 623 : le modele hesite. Le marqueur `city=__rare_city__` pousse vers canular (`+1,643`) et `shape=triangle` ajoute tres peu (`+0,024`). L'heure pousse contre (`-0,166` et `-0,066`). La ligne passe au-dessus de `0,5` de presque rien.
+- Ligne 59 142 : c'est un vrai canular rate par le modele. `city=__rare_city__` pousse vers canular (`+1,643`) et l'heure a une petite contribution positive (`+0,097`), mais la forme manquante pousse contre (`-0,237`) et l'autre composante de l'heure aussi (`-0,071`). Le dossier finit juste sous la frontiere.
+
+Pour l'explication globale, je melange une colonne a la fois dans le test et je regarde la chute de l'average precision. Le score de base est `0,01038`.
+
+| Colonne melangee | Score apres melange | Chute |
+| --- | ---: | ---: |
+| `shape` | 0,00885 | 0,00153 |
+| `hour` | 0,00904 | 0,00135 |
+| `city` | 0,00949 | 0,00089 |
+
+La colonne qui me surprend est `shape` : elle fait plus chuter le score que `city`, alors que la ville avait l'air etre la variable la plus riche et la plus dangereuse avec ses 22 018 valeurs brutes. En pratique, apres regroupement des villes rares, la forme garde plus de signal global que prevu.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 15 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, et un score doit venir avec sa fourchette.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 16 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, un score doit venir avec sa fourchette, et une decision doit pouvoir etre expliquee dossier par dossier.
