@@ -271,6 +271,36 @@ class PhaseFourteenResult:
     test_size: int
 
 
+@dataclass(frozen=True)
+class MetricInterval:
+    minimum: float
+    mean: float
+    maximum: float
+
+
+@dataclass(frozen=True)
+class SplitMetric:
+    test_size: int
+    test_hoax_count: int
+    recall: float
+    precision: float
+
+
+@dataclass(frozen=True)
+class PhaseFifteenResult:
+    split_count: int
+    temporal_test_size: int
+    temporal_test_hoax_count: int
+    repeated_test_size: int
+    repeated_test_hoax_count: int
+    recall_interval: MetricInterval
+    precision_interval: MetricInterval
+    analyst_first: float
+    analyst_second: float
+    analyst_gap: float
+    answer: str
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -1414,6 +1444,68 @@ def train_phase_fourteen(rows: list[dict[str, Any]]) -> PhaseFourteenResult:
     )
 
 
+def metric_interval(values: list[float]) -> MetricInterval:
+    return MetricInterval(
+        minimum=min(values),
+        mean=statistics.mean(values),
+        maximum=max(values),
+    )
+
+
+def train_phase_fifteen(rows: list[dict[str, Any]], split_count: int = 20) -> PhaseFifteenResult:
+    from sklearn.metrics import precision_score, recall_score
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    labels = [int(row["is_hoax"]) for row in rows]
+    splitter = StratifiedShuffleSplit(
+        n_splits=split_count,
+        test_size=TEST_SIZE,
+        random_state=MODEL_RANDOM_STATE,
+    )
+
+    metrics: list[SplitMetric] = []
+    for train_indices_array, test_indices_array in splitter.split(rows, labels):
+        train_indices = [int(index) for index in train_indices_array]
+        test_indices = [int(index) for index in test_indices_array]
+        output = phase_twelve_probability_output(rows, train_indices, test_indices)
+        metrics.append(
+            SplitMetric(
+                test_size=len(test_indices),
+                test_hoax_count=sum(output.labels),
+                recall=recall_score(output.labels, output.predictions, zero_division=0),
+                precision=precision_score(output.labels, output.predictions, zero_division=0),
+            )
+        )
+
+    temporal_train_indices, temporal_test_indices, _cutoff_date = temporal_split_indices(rows)
+    temporal_labels = [int(rows[index]["is_hoax"]) for index in temporal_test_indices]
+    recall_values = [item.recall for item in metrics]
+    precision_values = [item.precision for item in metrics]
+    analyst_first = 0.31
+    analyst_second = 0.34
+    analyst_gap = abs(analyst_second - analyst_first)
+    recall_width = max(recall_values) - min(recall_values)
+    answer = (
+        "impossible de trancher seulement avec ces deux chiffres : "
+        f"leur ecart de {analyst_gap:.2f} est plus petit que la largeur observee "
+        f"de l'intervalle de rappel ({recall_width:.3f})"
+    )
+
+    return PhaseFifteenResult(
+        split_count=split_count,
+        temporal_test_size=len(temporal_test_indices),
+        temporal_test_hoax_count=sum(temporal_labels),
+        repeated_test_size=metrics[0].test_size,
+        repeated_test_hoax_count=metrics[0].test_hoax_count,
+        recall_interval=metric_interval(recall_values),
+        precision_interval=metric_interval(precision_values),
+        analyst_first=analyst_first,
+        analyst_second=analyst_second,
+        analyst_gap=analyst_gap,
+        answer=answer,
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -1678,6 +1770,31 @@ def print_phase_fourteen(result: PhaseFourteenResult) -> None:
     print_calibration_bins("Apres correction :", result.calibrated_bins)
 
 
+def format_interval(interval: MetricInterval) -> str:
+    return f"{interval.minimum * 100:.1f}% - {interval.maximum * 100:.1f}% (moyenne {interval.mean * 100:.1f}%)"
+
+
+def print_phase_fifteen(result: PhaseFifteenResult) -> None:
+    print()
+    print("Phase 15 - Deux analystes, deux chiffres")
+    print(f"Decoupes utilisees : {result.split_count}")
+    print(
+        f"Test temporel actuel : {result.temporal_test_size} releves, "
+        f"{result.temporal_test_hoax_count} canulars"
+    )
+    print(
+        f"Chaque test repete : {result.repeated_test_size} releves, "
+        f"{result.repeated_test_hoax_count} canulars"
+    )
+    print(f"Intervalle rappel : {format_interval(result.recall_interval)}")
+    print(f"Intervalle precision : {format_interval(result.precision_interval)}")
+    print(
+        f"Analystes compares : {result.analyst_first:.2f} contre "
+        f"{result.analyst_second:.2f}, ecart {result.analyst_gap:.2f}"
+    )
+    print(f"Reponse : {result.answer}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -1733,6 +1850,9 @@ def main() -> int:
 
     phase_fourteen = train_phase_fourteen(phase_two.typed_rows)
     print_phase_fourteen(phase_fourteen)
+
+    phase_fifteen = train_phase_fifteen(phase_two.typed_rows)
+    print_phase_fifteen(phase_fifteen)
     return 0
 
 

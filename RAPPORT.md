@@ -329,8 +329,25 @@ Apres correction :
 
 La correction ne rend pas le modele brillant : elle dit surtout qu'il n'a pas le droit de promettre 80 %. Apres calibration, toutes les probabilites tombent sous 10 %. La probabilite moyenne reste encore un peu trop haute, 1,72 % annonces contre 0,76 % observes, mais l'ordre de grandeur est beaucoup plus defendable que les 50 % ou 80 % annonces avant.
 
+## Phase 15 - Deux analystes, deux chiffres
+
+Je ne donne plus un score seul. Je refais la mesure sur 20 decoupes stratifiees differentes, avec le meme modele que la phase 12. A chaque fois, les villes frequentes et les formes frequentes sont reapprises uniquement sur l'apprentissage de la decoupe.
+
+Le test temporel actuel contient 22 570 releves, dont 171 canulars. Dans les decoupes repetees, chaque test contient 22 170 releves, dont 201 canulars. Ce dernier nombre explique deja pourquoi les scores bougent : le rappel se calcule sur seulement 201 cas positifs.
+
+Fourchettes observees sur les 20 decoupes :
+
+| Mesure | Minimum | Moyenne | Maximum |
+| --- | ---: | ---: | ---: |
+| Rappel des canulars | 48,8 % | 54,0 % | 61,7 % |
+| Precision des signalements | 1,10 % | 1,24 % | 1,33 % |
+
+Mon nombre principal n'est donc pas `54,0 %` de rappel, mais un rappel observe entre `48,8 %` et `61,7 %` sur ces decoupes. La precision reste tres basse dans toutes les decoupes : entre `1,10 %` et `1,33 %`.
+
+Si deux analystes annoncent `0,31` et `0,34`, je ne deploie pas automatiquement le second. Leur ecart est de 0,03, alors que ma fourchette de rappel a une largeur de 0,129. Avec une incertitude de cette taille, ces deux chiffres peuvent raconter la meme performance mesuree sur deux decoupes differentes.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 14 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, et une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 15 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, et un score doit venir avec sa fourchette.
