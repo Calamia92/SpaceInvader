@@ -350,6 +350,28 @@ class PhaseSixteenResult:
     surprising_column_note: str
 
 
+@dataclass(frozen=True)
+class ZonePerformance:
+    zone: str
+    row_count: int
+    hoax_count: int
+    hoax_proportion: float
+    predicted_count: int
+    recall: float
+    precision: float
+    default_cost: int
+    best_threshold: float
+    best_cost: int
+
+
+@dataclass(frozen=True)
+class PhaseSeventeenResult:
+    threshold_used_for_scores: float
+    zones: list[ZonePerformance]
+    decision: str
+    caution: str
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -1718,6 +1740,93 @@ def train_phase_sixteen(rows: list[dict[str, Any]]) -> PhaseSixteenResult:
     )
 
 
+def geographic_zone(row: dict[str, Any]) -> str:
+    country = normalized_text(row.get("country"))
+    if country == "us":
+        return "Etats-Unis"
+    if country == "ca":
+        return "Canada"
+    if country == "gb":
+        return "Royaume-Uni"
+    if country == "au":
+        return "Australie"
+    if not country:
+        return "Pays manquant"
+    return "Autres pays"
+
+
+def best_cost_threshold(labels: list[int], probabilities: list[float]) -> ThresholdCost:
+    candidates = sorted({0.0, 0.5, 1.0, *probabilities})
+    return min(
+        (cost_at_threshold(labels, probabilities, threshold) for threshold in candidates),
+        key=lambda item: (item.cost, -item.threshold),
+    )
+
+
+def zone_performance(
+    zone: str,
+    labels: list[int],
+    probabilities: list[float],
+    threshold: float,
+) -> ZonePerformance:
+    from sklearn.metrics import precision_score, recall_score
+
+    predictions = [int(probability >= threshold) for probability in probabilities]
+    default_cost = cost_at_threshold(labels, probabilities, threshold)
+    best_cost = best_cost_threshold(labels, probabilities)
+    return ZonePerformance(
+        zone=zone,
+        row_count=len(labels),
+        hoax_count=sum(labels),
+        hoax_proportion=sum(labels) / len(labels) if labels else 0.0,
+        predicted_count=sum(predictions),
+        recall=recall_score(labels, predictions, zero_division=0),
+        precision=precision_score(labels, predictions, zero_division=0),
+        default_cost=default_cost.cost,
+        best_threshold=best_cost.threshold,
+        best_cost=best_cost.cost,
+    )
+
+
+def train_phase_seventeen(rows: list[dict[str, Any]]) -> PhaseSeventeenResult:
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    trained = train_inspectable_phase_twelve_model(rows, train_indices, test_indices)
+    threshold = 0.5
+    zones: dict[str, tuple[list[int], list[float]]] = {}
+
+    for position, row_index in enumerate(trained.test_indices):
+        zone = geographic_zone(rows[row_index])
+        labels, probabilities = zones.setdefault(zone, ([], []))
+        labels.append(trained.labels[position])
+        probabilities.append(trained.probabilities[position])
+
+    performances = [
+        zone_performance("Global", trained.labels, trained.probabilities, threshold)
+    ]
+    zone_order = ["Etats-Unis", "Canada", "Royaume-Uni", "Australie", "Pays manquant", "Autres pays"]
+    for zone in zone_order:
+        if zone not in zones:
+            continue
+        labels, probabilities = zones[zone]
+        performances.append(zone_performance(zone, labels, probabilities, threshold))
+
+    decision = (
+        "je garde une frontiere unique pour le deploiement : la frontiere cout minimale reste 1,0 "
+        "dans le test global, et les zones hors Etats-Unis contiennent trop peu de canulars pour "
+        "apprendre une frontiere locale fiable"
+    )
+    caution = (
+        "les zones petites doivent etre lues avec la phase 15 en tete : quelques canulars en plus ou "
+        "en moins suffisent a deplacer fortement le rappel"
+    )
+    return PhaseSeventeenResult(
+        threshold_used_for_scores=threshold,
+        zones=performances,
+        decision=decision,
+        caution=caution,
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -2036,6 +2145,22 @@ def print_phase_sixteen(result: PhaseSixteenResult) -> None:
     print(f"Colonne surprenante : {result.surprising_column_note}")
 
 
+def print_phase_seventeen(result: PhaseSeventeenResult) -> None:
+    print()
+    print("Phase 17 - L'angle mort du Bureau")
+    print(f"Seuil utilise pour les scores : {result.threshold_used_for_scores:.1f}")
+    for item in result.zones:
+        print(
+            f"  - {item.zone}: {item.row_count} releves, {item.hoax_count} canulars, "
+            f"proportion {item.hoax_proportion * 100:.3f}%, "
+            f"rappel {item.recall * 100:.1f}, precision {item.precision * 100:.1f}, "
+            f"predits {item.predicted_count}, cout a 0.5 {item.default_cost}, "
+            f"meilleur seuil {item.best_threshold:.6f}, meilleur cout {item.best_cost}"
+        )
+    print(f"Decision : {result.decision}")
+    print(f"Prudence : {result.caution}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -2097,6 +2222,9 @@ def main() -> int:
 
     phase_sixteen = train_phase_sixteen(phase_two.typed_rows)
     print_phase_sixteen(phase_sixteen)
+
+    phase_seventeen = train_phase_seventeen(phase_two.typed_rows)
+    print_phase_seventeen(phase_seventeen)
     return 0
 
 

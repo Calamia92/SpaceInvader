@@ -374,8 +374,28 @@ Pour l'explication globale, je melange une colonne a la fois dans le test et je 
 
 La colonne qui me surprend est `shape` : elle fait plus chuter le score que `city`, alors que la ville avait l'air etre la variable la plus riche et la plus dangereuse avec ses 22 018 valeurs brutes. En pratique, apres regroupement des villes rares, la forme garde plus de signal global que prevu.
 
+## Phase 17 - L'angle mort du Bureau
+
+Je recalcule les deux nombres du modele par zone geographique, sur le test temporel. Pour comparer le comportement du modele, j'utilise le seuil technique `0,5`. La decision metier reste celle de la phase 13.
+
+| Zone | Releves | Canulars | Proportion de canulars | Releves marques a 0,5 | Rappel | Precision | Meilleur seuil cout |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Global | 22 570 | 171 | 0,758 % | 7 690 | 48,5 % | 1,08 % | 1,000 |
+| Etats-Unis | 19 011 | 126 | 0,663 % | 6 291 | 49,2 % | 0,99 % | 1,000 |
+| Canada | 706 | 8 | 1,133 % | 226 | 37,5 % | 1,33 % | 1,000 |
+| Royaume-Uni | 223 | 8 | 3,587 % | 83 | 62,5 % | 6,02 % | 0,555 |
+| Australie | 85 | 2 | 2,353 % | 40 | 50,0 % | 2,50 % | 1,000 |
+| Pays manquant | 2 521 | 25 | 0,992 % | 1 040 | 40,0 % | 0,96 % | 1,000 |
+| Autres pays | 24 | 2 | 8,333 % | 10 | 100,0 % | 20,00 % | 0,563 |
+
+L'ecart avec le global est visible. Les Etats-Unis dominent le test avec 19 011 releves sur 22 570, donc le score global leur ressemble beaucoup. Les autres zones ont des proportions de canulars differentes, mais elles contiennent tres peu de cas positifs : 8 canulars au Canada, 8 au Royaume-Uni, 2 en Australie, 2 dans les autres pays. Avec des volumes aussi faibles, la phase 15 s'applique encore plus fortement : quelques dossiers suffisent a faire bouger le rappel.
+
+Decision : je garde une frontiere unique pour le deploiement. La frontiere cout minimale globale reste `1,0`, et les frontieres locales plus basses du Royaume-Uni ou des autres pays reposent sur trop peu de canulars pour etre defendables. Une frontiere par zone donnerait une impression de precision, mais elle serait apprise sur des zones ou le signal est trop fragile.
+
+Ce choix ne veut pas dire que le modele fonctionne aussi bien partout. Il dit seulement que je ne sais pas assez bien mesurer les petites zones pour leur donner chacune une politique automatique separee. Si le Bureau veut une infiltration mondiale, il faut d'abord enrichir les donnees hors Etats-Unis ou imposer une revue humaine specifique sur ces zones.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 16 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, un score doit venir avec sa fourchette, et une decision doit pouvoir etre expliquee dossier par dossier.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 17 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, un score doit venir avec sa fourchette, une decision doit pouvoir etre expliquee dossier par dossier, et le score global doit etre relu par zone geographique.
