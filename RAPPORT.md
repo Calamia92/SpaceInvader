@@ -394,8 +394,57 @@ Decision : je garde une frontiere unique pour le deploiement. La frontiere cout 
 
 Ce choix ne veut pas dire que le modele fonctionne aussi bien partout. Il dit seulement que je ne sais pas assez bien mesurer les petites zones pour leur donner chacune une politique automatique separee. Si le Bureau veut une infiltration mondiale, il faut d'abord enrichir les donnees hors Etats-Unis ou imposer une revue humaine specifique sur ces zones.
 
+## Phase 18 - La transmission d'archive
+
+Comme l'etiquette `is_hoax` vient d'une annotation dans le commentaire, je regarde son evolution avec `date_posted`, c'est-a-dire la date ou le dossier entre dans la base du Bureau.
+
+Proportion de canulars par annee :
+
+| Annee | Releves | Canulars | Proportion |
+| ---: | ---: | ---: | ---: |
+| 1998 | 982 | 0 | 0,000 % |
+| 1999 | 5 023 | 3 | 0,060 % |
+| 2000 | 3 367 | 1 | 0,030 % |
+| 2001 | 3 973 | 1 | 0,025 % |
+| 2002 | 4 758 | 1 | 0,021 % |
+| 2003 | 5 379 | 2 | 0,037 % |
+| 2004 | 5 779 | 2 | 0,035 % |
+| 2005 | 5 827 | 26 | 0,446 % |
+| 2006 | 4 891 | 59 | 1,206 % |
+| 2007 | 5 385 | 105 | 1,950 % |
+| 2008 | 5 611 | 155 | 2,762 % |
+| 2009 | 6 462 | 104 | 1,609 % |
+| 2010 | 4 867 | 77 | 1,582 % |
+| 2011 | 6 129 | 113 | 1,844 % |
+| 2012 | 8 756 | 45 | 0,514 % |
+| 2013 | 8 170 | 52 | 0,636 % |
+| 2014 | 3 320 | 56 | 1,687 % |
+
+La courbe n'est pas plate. Avant 2005, le mot `hoax` apparait presque jamais. Il monte fortement jusqu'a 2008, puis retombe en 2012 avant de remonter partiellement en 2014. Cela ressemble plus a un changement d'habitude d'annotation qu'a une propriete stable du ciel.
+
+Epreuve ancien vers recent :
+
+| Evaluation | Apprentissage | Test | Rappel | Precision |
+| --- | ---: | ---: | ---: | ---: |
+| Phase 8, modele corrige de l'epoque | 66 109 | 22 570 | 2,3 % | 1,6 % |
+| Systeme actuel sur la meme decoupe temporelle | 66 109 | 22 570 | 48,5 % | 1,1 % |
+| Systeme actuel, anciens uniquement vers recents | 44 339 | 22 170 | 31,1 % | 1,0 % |
+
+Pour la derniere ligne, j'entraine seulement sur la moitie la plus ancienne, jusqu'au 08/10/2007. Je laisse 22 170 releves intermediaires hors de l'epreuve, puis je teste sur les 22 170 releves les plus recents, a partir du 10/10/2011. Le rappel baisse de 48,5 % a 31,1 % quand le modele apprend sur une archive plus ancienne. C'est coherent avec la courbe annuelle : la definition pratique de `hoax` n'est pas stable.
+
+Surveillance sans connaitre la verite :
+
+| Indicateur | Reference recente | Frequence | Rappel des analystes si |
+| --- | ---: | --- | --- |
+| Taux de pays manquant | 11,17 % | chaque semaine | le taux sort de la bande 8 %-14 % |
+| Part des releves Etats-Unis | 84,23 % | chaque semaine | la part sort de la bande 80 %-88 % |
+| Part des villes rares ou nouvelles | 64,10 % | chaque semaine | l'ecart depasse 5 points |
+| Part des scores bruts au-dessus de `0,5` | 34,07 % | chaque semaine | l'ecart depasse 5 points |
+
+Ces indicateurs ne demandent jamais de savoir si un releve est vraiment un canular. Ils surveillent ce qui arrive au Bureau : la structure geographique, la qualite de remplissage, la nouveaute des villes et la distribution des scores. Si l'un de ces signaux sort de sa bande, je rappelle les analystes avant de faire confiance aux scores.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 17 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, un score doit venir avec sa fourchette, une decision doit pouvoir etre expliquee dossier par dossier, et le score global doit etre relu par zone geographique.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 18 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse, un score doit venir avec sa fourchette, une decision doit pouvoir etre expliquee dossier par dossier, le score global doit etre relu par zone geographique, et la stabilite de l'annotation doit etre surveillee dans le temps.

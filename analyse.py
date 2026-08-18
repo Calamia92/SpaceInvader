@@ -372,6 +372,39 @@ class PhaseSeventeenResult:
     caution: str
 
 
+@dataclass(frozen=True)
+class YearlyHoaxRate:
+    year: int
+    row_count: int
+    hoax_count: int
+    hoax_proportion: float
+
+
+@dataclass(frozen=True)
+class MonitoringIndicator:
+    name: str
+    baseline: float
+    frequency: str
+    alert_rule: str
+
+
+@dataclass(frozen=True)
+class PhaseEighteenResult:
+    yearly_rates: list[YearlyHoaxRate]
+    archive_train_size: int
+    archive_test_size: int
+    archive_gap_size: int
+    archive_train_end: str
+    archive_test_start: str
+    phase_eight_recall: float
+    phase_eight_precision: float
+    current_temporal_recall: float
+    current_temporal_precision: float
+    archive_recall: float
+    archive_precision: float
+    monitoring_indicators: list[MonitoringIndicator]
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -1827,6 +1860,118 @@ def train_phase_seventeen(rows: list[dict[str, Any]]) -> PhaseSeventeenResult:
     )
 
 
+def yearly_hoax_rates(rows: list[dict[str, Any]]) -> list[YearlyHoaxRate]:
+    from collections import defaultdict
+
+    year_labels: dict[int, list[int]] = defaultdict(list)
+    for row in rows:
+        posted_at = row.get("date_posted")
+        if not isinstance(posted_at, datetime):
+            continue
+        year_labels[posted_at.year].append(int(row["is_hoax"]))
+
+    return [
+        YearlyHoaxRate(
+            year=year,
+            row_count=len(labels),
+            hoax_count=sum(labels),
+            hoax_proportion=sum(labels) / len(labels) if labels else 0.0,
+        )
+        for year, labels in sorted(year_labels.items())
+    ]
+
+
+def archive_split_indices(rows: list[dict[str, Any]]) -> tuple[list[int], list[int], list[int], str, str]:
+    dated_indices = sorted(
+        (row["date_posted"].date(), index)
+        for index, row in enumerate(rows)
+        if isinstance(row.get("date_posted"), datetime)
+    )
+    train_end_position = int(len(dated_indices) * 0.5)
+    test_start_position = int(len(dated_indices) * 0.75)
+    train_part = dated_indices[:train_end_position]
+    gap_part = dated_indices[train_end_position:test_start_position]
+    test_part = dated_indices[test_start_position:]
+    train_indices = [index for _date, index in train_part]
+    gap_indices = [index for _date, index in gap_part]
+    test_indices = [index for _date, index in test_part]
+    return (
+        train_indices,
+        gap_indices,
+        test_indices,
+        train_part[-1][0].isoformat(),
+        test_part[0][0].isoformat(),
+    )
+
+
+def monitoring_indicators(
+    rows: list[dict[str, Any]],
+    trained: TrainedPhaseTwelveModel,
+) -> list[MonitoringIndicator]:
+    test_rows = [rows[index] for index in trained.test_indices]
+    total = len(test_rows)
+    missing_country_rate = sum(1 for row in test_rows if is_missing_value(row.get("country"))) / total
+    us_share = sum(1 for row in test_rows if normalized_text(row.get("country")) == "us") / total
+    rare_city_rate = sum(
+        1
+        for row in test_rows
+        if normalized_text(row.get("city")) not in trained.frequent_cities
+    ) / total
+    high_score_rate = sum(1 for probability in trained.probabilities if probability >= 0.5) / total
+
+    return [
+        MonitoringIndicator(
+            name="taux de pays manquant",
+            baseline=missing_country_rate,
+            frequency="chaque semaine, sur les transmissions de la semaine",
+            alert_rule="rappeler les analystes si le taux sort de la bande 8 %-14 %",
+        ),
+        MonitoringIndicator(
+            name="part des releves Etats-Unis",
+            baseline=us_share,
+            frequency="chaque semaine, sur les transmissions de la semaine",
+            alert_rule="rappeler les analystes si la part sort de la bande 80 %-88 %",
+        ),
+        MonitoringIndicator(
+            name="part des villes rares ou nouvelles",
+            baseline=rare_city_rate,
+            frequency="chaque semaine, sur les transmissions de la semaine",
+            alert_rule="rappeler les analystes si l'ecart depasse 5 points par rapport au niveau de reference",
+        ),
+        MonitoringIndicator(
+            name="part des scores bruts au-dessus de 0,5",
+            baseline=high_score_rate,
+            frequency="chaque semaine, sur les transmissions de la semaine",
+            alert_rule="rappeler les analystes si l'ecart depasse 5 points par rapport au niveau de reference",
+        ),
+    ]
+
+
+def train_phase_eighteen(rows: list[dict[str, Any]], phase_eight: PhaseEightResult) -> PhaseEighteenResult:
+    from sklearn.metrics import precision_score, recall_score
+
+    archive_train_indices, archive_gap_indices, archive_test_indices, train_end, test_start = archive_split_indices(rows)
+    archive_output = phase_twelve_probability_output(rows, archive_train_indices, archive_test_indices)
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    trained_recent = train_inspectable_phase_twelve_model(rows, train_indices, test_indices)
+
+    return PhaseEighteenResult(
+        yearly_rates=yearly_hoax_rates(rows),
+        archive_train_size=len(archive_train_indices),
+        archive_test_size=len(archive_test_indices),
+        archive_gap_size=len(archive_gap_indices),
+        archive_train_end=train_end,
+        archive_test_start=test_start,
+        phase_eight_recall=phase_eight.corrected_temporal.recall,
+        phase_eight_precision=phase_eight.corrected_temporal.precision,
+        current_temporal_recall=recall_score(trained_recent.labels, trained_recent.predictions, zero_division=0),
+        current_temporal_precision=precision_score(trained_recent.labels, trained_recent.predictions, zero_division=0),
+        archive_recall=recall_score(archive_output.labels, archive_output.predictions, zero_division=0),
+        archive_precision=precision_score(archive_output.labels, archive_output.predictions, zero_division=0),
+        monitoring_indicators=monitoring_indicators(rows, trained_recent),
+    )
+
+
 def print_phase_one(result: PhaseOneResult) -> None:
     print("Phase 1 - Ouvrir la caisse")
     print(f"Lignes contenues dans le fichier : {result.total_rows}")
@@ -2161,6 +2306,41 @@ def print_phase_seventeen(result: PhaseSeventeenResult) -> None:
     print(f"Prudence : {result.caution}")
 
 
+def print_phase_eighteen(result: PhaseEighteenResult) -> None:
+    print()
+    print("Phase 18 - La transmission d'archive")
+    print("Proportion de canulars par annee :")
+    for item in result.yearly_rates:
+        print(
+            f"  - {item.year}: {item.row_count} releves, "
+            f"{item.hoax_count} canulars, {item.hoax_proportion * 100:.3f}%"
+        )
+    print(
+        "Epreuve archive : "
+        f"{result.archive_train_size} anciens releves jusqu'au {result.archive_train_end}, "
+        f"{result.archive_gap_size} releves intermediaires ignores, "
+        f"{result.archive_test_size} releves recents depuis {result.archive_test_start}"
+    )
+    print(
+        f"Phase 8 corrigee : rappel {result.phase_eight_recall * 100:.1f}, "
+        f"precision {result.phase_eight_precision * 100:.1f}"
+    )
+    print(
+        f"Systeme actuel sur decoupe phase 8 : rappel {result.current_temporal_recall * 100:.1f}, "
+        f"precision {result.current_temporal_precision * 100:.1f}"
+    )
+    print(
+        f"Ancien vers recent : rappel {result.archive_recall * 100:.1f}, "
+        f"precision {result.archive_precision * 100:.1f}"
+    )
+    print("Indicateurs de surveillance sans label :")
+    for item in result.monitoring_indicators:
+        print(
+            f"  - {item.name}: reference {item.baseline * 100:.2f}%, "
+            f"frequence {item.frequency}, alerte {item.alert_rule}"
+        )
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -2225,6 +2405,9 @@ def main() -> int:
 
     phase_seventeen = train_phase_seventeen(phase_two.typed_rows)
     print_phase_seventeen(phase_seventeen)
+
+    phase_eighteen = train_phase_eighteen(phase_two.typed_rows, phase_eight)
+    print_phase_eighteen(phase_eighteen)
     return 0
 
 
