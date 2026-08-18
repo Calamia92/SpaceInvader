@@ -211,6 +211,39 @@ class PhaseTwelveResult:
     precision: float
 
 
+@dataclass(frozen=True)
+class PhaseTwelveModelData:
+    before_width: int
+    after_width: int
+    city_rule: str
+    shape_rule: str
+    singleton_city_count: int
+    kept_city_count: int
+    raw_shape_count: int
+    normalized_shape_count: int
+    distance_23_to_0: float
+    distance_23_to_20: float
+    labels: list[int]
+    probabilities: list[float]
+    predictions: list[int]
+
+
+@dataclass(frozen=True)
+class ThresholdCost:
+    threshold: float
+    false_negative_count: int
+    false_positive_count: int
+    cost: int
+
+
+@dataclass(frozen=True)
+class PhaseThirteenResult:
+    cost_table: list[ThresholdCost]
+    selected: ThresholdCost
+    default: ThresholdCost
+    saved_credits: int
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -1128,12 +1161,11 @@ def phase_twelve_features(
     }
 
 
-def train_phase_twelve(rows: list[dict[str, Any]]) -> PhaseTwelveResult:
+def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveModelData:
     from collections import Counter
 
     from sklearn.feature_extraction import DictVectorizer
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import precision_score, recall_score
 
     train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
     frequent_cities = fit_frequent_cities(rows, train_indices)
@@ -1165,6 +1197,7 @@ def train_phase_twelve(rows: list[dict[str, Any]]) -> PhaseTwelveResult:
     )
     classifier.fit(train_matrix, train_labels)
     predictions = classifier.predict(test_matrix)
+    probabilities = classifier.predict_proba(test_matrix)[:, 1]
 
     city_counts = Counter(normalized_text(row.get("city")) for row in rows)
     raw_city_count = sum(1 for city in city_counts if city)
@@ -1174,7 +1207,7 @@ def train_phase_twelve(rows: list[dict[str, Any]]) -> PhaseTwelveResult:
     has_rare_shape = any(shape not in frequent_shapes for shape in canonical_shapes)
 
     before_width = raw_city_count + len(raw_shapes) + 24
-    return PhaseTwelveResult(
+    return PhaseTwelveModelData(
         before_width=before_width,
         after_width=len(vectorizer.get_feature_names_out()),
         city_rule=f"garder les villes presentes au moins {CITY_MIN_COUNT} fois dans l'apprentissage",
@@ -1188,9 +1221,79 @@ def train_phase_twelve(rows: list[dict[str, Any]]) -> PhaseTwelveResult:
         normalized_shape_count=len(frequent_shapes) + int(has_rare_shape),
         distance_23_to_0=hour_distance(23, 0),
         distance_23_to_20=hour_distance(23, 20),
-        recall=recall_score(test_labels, predictions, zero_division=0),
-        precision=precision_score(test_labels, predictions, zero_division=0),
+        labels=test_labels,
+        probabilities=[float(probability) for probability in probabilities],
+        predictions=[int(prediction) for prediction in predictions],
     )
+
+
+def summarize_phase_twelve(model_data: PhaseTwelveModelData) -> PhaseTwelveResult:
+    from sklearn.metrics import precision_score, recall_score
+
+    return PhaseTwelveResult(
+        before_width=model_data.before_width,
+        after_width=model_data.after_width,
+        city_rule=model_data.city_rule,
+        shape_rule=model_data.shape_rule,
+        singleton_city_count=model_data.singleton_city_count,
+        kept_city_count=model_data.kept_city_count,
+        raw_shape_count=model_data.raw_shape_count,
+        normalized_shape_count=model_data.normalized_shape_count,
+        distance_23_to_0=model_data.distance_23_to_0,
+        distance_23_to_20=model_data.distance_23_to_20,
+        recall=recall_score(model_data.labels, model_data.predictions, zero_division=0),
+        precision=precision_score(model_data.labels, model_data.predictions, zero_division=0),
+    )
+
+
+def train_phase_twelve(rows: list[dict[str, Any]]) -> PhaseTwelveResult:
+    return summarize_phase_twelve(train_phase_twelve_model_data(rows))
+
+
+def cost_at_threshold(labels: list[int], probabilities: list[float], threshold: float) -> ThresholdCost:
+    false_negatives = 0
+    false_positives = 0
+    for label, probability in zip(labels, probabilities, strict=True):
+        predicted_hoax = probability >= threshold
+        if label == 1 and not predicted_hoax:
+            false_negatives += 1
+        elif label == 0 and predicted_hoax:
+            false_positives += 1
+
+    return ThresholdCost(
+        threshold=threshold,
+        false_negative_count=false_negatives,
+        false_positive_count=false_positives,
+        cost=false_negatives * 30 + false_positives * 2,
+    )
+
+
+def summarize_phase_thirteen(model_data: PhaseTwelveModelData) -> PhaseThirteenResult:
+    labels = model_data.labels
+    probabilities = model_data.probabilities
+    candidates = sorted({0.0, 0.5, 1.0, *probabilities})
+    selected = min(
+        (cost_at_threshold(labels, probabilities, threshold) for threshold in candidates),
+        key=lambda item: (item.cost, -item.threshold),
+    )
+
+    table_thresholds = {round(step / 10, 1) for step in range(11)}
+    table_thresholds.add(round(selected.threshold, 6))
+    cost_table = [
+        cost_at_threshold(labels, probabilities, threshold)
+        for threshold in sorted(table_thresholds)
+    ]
+    default = cost_at_threshold(labels, probabilities, 0.5)
+    return PhaseThirteenResult(
+        cost_table=cost_table,
+        selected=selected,
+        default=default,
+        saved_credits=default.cost - selected.cost,
+    )
+
+
+def train_phase_thirteen(rows: list[dict[str, Any]]) -> PhaseThirteenResult:
+    return summarize_phase_thirteen(train_phase_twelve_model_data(rows))
 
 
 def print_phase_one(result: PhaseOneResult) -> None:
@@ -1413,6 +1516,25 @@ def print_phase_twelve(result: PhaseTwelveResult) -> None:
     print(f"Scores avec ville, forme et heure : rappel {result.recall * 100:.1f}, precision {result.precision * 100:.1f}")
 
 
+def print_phase_thirteen(result: PhaseThirteenResult) -> None:
+    print()
+    print("Phase 13 - La facture du Bureau")
+    print("Facture selon la frontiere :")
+    for item in result.cost_table:
+        print(
+            f"  - seuil {item.threshold:.6f}: "
+            f"canulars rates {item.false_negative_count}, "
+            f"fausses alertes {item.false_positive_count}, "
+            f"cout {item.cost} credits"
+        )
+    print(
+        f"Frontiere retenue : {result.selected.threshold:.6f}, "
+        f"cout {result.selected.cost} credits"
+    )
+    print(f"Facture a 0.5 : {result.default.cost} credits")
+    print(f"Credits economises : {result.saved_credits}")
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -1459,8 +1581,12 @@ def main() -> int:
     phase_eleven = train_phase_eleven(phase_two.typed_rows)
     print_phase_eleven(phase_eleven)
 
-    phase_twelve = train_phase_twelve(phase_two.typed_rows)
+    phase_twelve_model_data = train_phase_twelve_model_data(phase_two.typed_rows)
+    phase_twelve = summarize_phase_twelve(phase_twelve_model_data)
     print_phase_twelve(phase_twelve)
+
+    phase_thirteen = summarize_phase_thirteen(phase_twelve_model_data)
+    print_phase_thirteen(phase_thirteen)
     return 0
 
 
