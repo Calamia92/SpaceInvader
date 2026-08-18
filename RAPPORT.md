@@ -289,8 +289,48 @@ La frontiere par defaut de la bibliotheque, `0,5`, coute 17 854 credits. La fron
 
 La justification ne vient pas d'un score de machine learning : elle vient du prix des erreurs. Avec une precision tres basse, les fausses alertes sont assez nombreuses pour couter plus cher que laisser passer tous les canulars marques dans ce test.
 
+## Phase 14 - Une promesse a 80 %
+
+Je decoupe les probabilites annoncees par le modele en tranches de 0,1. Pour chaque tranche, je compare la probabilite moyenne annoncee avec la proportion de canulars reellement observee dans le test.
+
+Avant correction :
+
+| Tranche annoncee | Releves | Probabilite moyenne annoncee | Canulars observes |
+| --- | ---: | ---: | ---: |
+| `[0,0 ; 0,1[` | 4 775 | 4,03 % | 0,69 % |
+| `[0,1 ; 0,2[` | 128 | 11,87 % | 2,34 % |
+| `[0,2 ; 0,3[` | 83 | 25,84 % | 0,00 % |
+| `[0,3 ; 0,4[` | 4 064 | 36,67 % | 0,47 % |
+| `[0,4 ; 0,5[` | 6 777 | 45,54 % | 0,71 % |
+| `[0,5 ; 0,6[` | 3 280 | 54,57 % | 1,01 % |
+| `[0,6 ; 0,7[` | 2 402 | 63,40 % | 1,08 % |
+| `[0,7 ; 0,8[` | 734 | 73,72 % | 0,95 % |
+| `[0,8 ; 0,9[` | 281 | 84,52 % | 0,71 % |
+| `[0,9 ; 1,0]` | 46 | 92,31 % | 0,00 % |
+
+Le systeme est beaucoup trop confiant. Le cas le plus parlant est la tranche `[0,8 ; 0,9[` : le modele annonce en moyenne 84,52 % de chances de canular, mais seulement 0,71 % des releves de cette tranche sont vraiment marques comme canulars. Les tranches tres hautes ont peu de releves, donc je ne les interprete pas seules, mais le sens de l'erreur est le meme sur les grosses tranches.
+
+Je corrige avec une calibration isotone. Pour ne pas regarder le test, je coupe l'apprentissage temporel en deux : 52 887 releves servent a entrainer le modele, 13 222 releves servent a apprendre la correction, puis les 22 570 releves du test restent gardes pour la mesure finale.
+
+Apres correction :
+
+| Tranche annoncee | Releves | Probabilite moyenne annoncee | Canulars observes |
+| --- | ---: | ---: | ---: |
+| `[0,0 ; 0,1[` | 22 570 | 1,72 % | 0,76 % |
+| `[0,1 ; 0,2[` | 0 | 0,00 % | 0,00 % |
+| `[0,2 ; 0,3[` | 0 | 0,00 % | 0,00 % |
+| `[0,3 ; 0,4[` | 0 | 0,00 % | 0,00 % |
+| `[0,4 ; 0,5[` | 0 | 0,00 % | 0,00 % |
+| `[0,5 ; 0,6[` | 0 | 0,00 % | 0,00 % |
+| `[0,6 ; 0,7[` | 0 | 0,00 % | 0,00 % |
+| `[0,7 ; 0,8[` | 0 | 0,00 % | 0,00 % |
+| `[0,8 ; 0,9[` | 0 | 0,00 % | 0,00 % |
+| `[0,9 ; 1,0]` | 0 | 0,00 % | 0,00 % |
+
+La correction ne rend pas le modele brillant : elle dit surtout qu'il n'a pas le droit de promettre 80 %. Apres calibration, toutes les probabilites tombent sous 10 %. La probabilite moyenne reste encore un peu trop haute, 1,72 % annonces contre 0,76 % observes, mais l'ordre de grandeur est beaucoup plus defendable que les 50 % ou 80 % annonces avant.
+
 ## Conclusion
 
 J'arrive a relancer toute l'analyse depuis le telechargement du fichier jusqu'aux scores actuels. Les donnees sont bien sales : certaines lignes n'ont pas le bon nombre de colonnes, des durees ne sont pas numeriques, une latitude contient une lettre et beaucoup d'heures sont ecrites `24:00`.
 
-Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 13 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, et la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`.
+Le modele qui utilise `comments` semble excellent, mais il profite d'une fuite d'information. Apres retrait de cette colonne, le modele devient beaucoup moins bon, mais il garde un avantage important sur le systeme du stagiaire : lui trouve au moins une partie des canulars, alors que le stagiaire n'en trouve aucun. Les phases 7 a 14 ajoutent les corrections de methode : un meme evenement ne doit plus etre coupe entre apprentissage et test, le test doit porter sur des dossiers plus recents, les cases vides doivent rester visibles, le vocabulaire du modele doit etre appris uniquement sur l'apprentissage, la duree doit etre reconstruite sans effacer les contradictions, les variables riches comme ville, heure et forme doivent etre encodees sans fuite ni explosion de largeur, la decision finale doit etre prise en credits plutot qu'avec une frontiere arbitraire a `0,5`, et une probabilite annoncee doit etre calibree avant d'etre presentee comme une promesse.

@@ -244,6 +244,33 @@ class PhaseThirteenResult:
     saved_credits: int
 
 
+@dataclass(frozen=True)
+class ProbabilityOutput:
+    labels: list[int]
+    probabilities: list[float]
+    predictions: list[int]
+    feature_count: int
+
+
+@dataclass(frozen=True)
+class CalibrationBin:
+    label: str
+    count: int
+    mean_probability: float
+    observed_proportion: float
+
+
+@dataclass(frozen=True)
+class PhaseFourteenResult:
+    raw_bins: list[CalibrationBin]
+    calibrated_bins: list[CalibrationBin]
+    correction_method: str
+    error_direction: str
+    base_train_size: int
+    calibration_size: int
+    test_size: int
+
+
 def download_data_if_missing(path: Path = DATA_PATH) -> None:
     if path.exists() and path.stat().st_size > 0:
         return
@@ -1161,13 +1188,20 @@ def phase_twelve_features(
     }
 
 
-def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveModelData:
-    from collections import Counter
+def force_sparse_int32(matrix: Any) -> Any:
+    matrix.indices = matrix.indices.astype("int32", copy=False)
+    matrix.indptr = matrix.indptr.astype("int32", copy=False)
+    return matrix
 
+
+def phase_twelve_probability_output(
+    rows: list[dict[str, Any]],
+    train_indices: list[int],
+    test_indices: list[int],
+) -> ProbabilityOutput:
     from sklearn.feature_extraction import DictVectorizer
     from sklearn.linear_model import LogisticRegression
 
-    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
     frequent_cities = fit_frequent_cities(rows, train_indices)
     frequent_shapes = fit_frequent_shapes(rows, train_indices)
     train_features = [
@@ -1182,12 +1216,8 @@ def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveMode
     test_labels = [int(rows[index]["is_hoax"]) for index in test_indices]
 
     vectorizer = DictVectorizer(sparse=True)
-    train_matrix = vectorizer.fit_transform(train_features)
-    test_matrix = vectorizer.transform(test_features)
-    train_matrix.indices = train_matrix.indices.astype("int32", copy=False)
-    train_matrix.indptr = train_matrix.indptr.astype("int32", copy=False)
-    test_matrix.indices = test_matrix.indices.astype("int32", copy=False)
-    test_matrix.indptr = test_matrix.indptr.astype("int32", copy=False)
+    train_matrix = force_sparse_int32(vectorizer.fit_transform(train_features))
+    test_matrix = force_sparse_int32(vectorizer.transform(test_features))
 
     classifier = LogisticRegression(
         class_weight="balanced",
@@ -1199,6 +1229,22 @@ def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveMode
     predictions = classifier.predict(test_matrix)
     probabilities = classifier.predict_proba(test_matrix)[:, 1]
 
+    return ProbabilityOutput(
+        labels=test_labels,
+        probabilities=[float(probability) for probability in probabilities],
+        predictions=[int(prediction) for prediction in predictions],
+        feature_count=len(vectorizer.get_feature_names_out()),
+    )
+
+
+def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveModelData:
+    from collections import Counter
+
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    probability_output = phase_twelve_probability_output(rows, train_indices, test_indices)
+    frequent_cities = fit_frequent_cities(rows, train_indices)
+    frequent_shapes = fit_frequent_shapes(rows, train_indices)
+
     city_counts = Counter(normalized_text(row.get("city")) for row in rows)
     raw_city_count = sum(1 for city in city_counts if city)
     raw_shapes = {normalized_text(row.get("shape")) for row in rows if normalized_text(row.get("shape"))}
@@ -1209,7 +1255,7 @@ def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveMode
     before_width = raw_city_count + len(raw_shapes) + 24
     return PhaseTwelveModelData(
         before_width=before_width,
-        after_width=len(vectorizer.get_feature_names_out()),
+        after_width=probability_output.feature_count,
         city_rule=f"garder les villes presentes au moins {CITY_MIN_COUNT} fois dans l'apprentissage",
         shape_rule=(
             "fusionner changed/changing et round/circle, puis regrouper les formes presentes "
@@ -1221,9 +1267,9 @@ def train_phase_twelve_model_data(rows: list[dict[str, Any]]) -> PhaseTwelveMode
         normalized_shape_count=len(frequent_shapes) + int(has_rare_shape),
         distance_23_to_0=hour_distance(23, 0),
         distance_23_to_20=hour_distance(23, 20),
-        labels=test_labels,
-        probabilities=[float(probability) for probability in probabilities],
-        predictions=[int(prediction) for prediction in predictions],
+        labels=probability_output.labels,
+        probabilities=probability_output.probabilities,
+        predictions=probability_output.predictions,
     )
 
 
@@ -1294,6 +1340,78 @@ def summarize_phase_thirteen(model_data: PhaseTwelveModelData) -> PhaseThirteenR
 
 def train_phase_thirteen(rows: list[dict[str, Any]]) -> PhaseThirteenResult:
     return summarize_phase_thirteen(train_phase_twelve_model_data(rows))
+
+
+def calibration_bins(labels: list[int], probabilities: list[float], bin_count: int = 10) -> list[CalibrationBin]:
+    bins: list[CalibrationBin] = []
+    for bin_index in range(bin_count):
+        low = bin_index / bin_count
+        high = (bin_index + 1) / bin_count
+        selected = [
+            (label, probability)
+            for label, probability in zip(labels, probabilities, strict=True)
+            if low <= probability < high or (bin_index == bin_count - 1 and probability == 1.0)
+        ]
+        count = len(selected)
+        mean_probability = statistics.mean(probability for _label, probability in selected) if selected else 0.0
+        observed_proportion = statistics.mean(label for label, _probability in selected) if selected else 0.0
+        bins.append(
+            CalibrationBin(
+                label=f"[{low:.1f};{high:.1f}{']' if bin_index == bin_count - 1 else '['}",
+                count=count,
+                mean_probability=mean_probability,
+                observed_proportion=observed_proportion,
+            )
+        )
+    return bins
+
+
+def split_training_for_calibration(train_indices: list[int]) -> tuple[list[int], list[int]]:
+    split_at = int(len(train_indices) * 0.8)
+    return train_indices[:split_at], train_indices[split_at:]
+
+
+def train_phase_fourteen(rows: list[dict[str, Any]]) -> PhaseFourteenResult:
+    from sklearn.isotonic import IsotonicRegression
+
+    train_indices, test_indices, _cutoff_date = temporal_split_indices(rows)
+    base_train_indices, calibration_indices = split_training_for_calibration(train_indices)
+    calibration_output = phase_twelve_probability_output(rows, base_train_indices, calibration_indices)
+    test_output = phase_twelve_probability_output(rows, base_train_indices, test_indices)
+
+    calibrator = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+    calibrator.fit(calibration_output.probabilities, calibration_output.labels)
+    calibrated_probabilities = [
+        float(probability)
+        for probability in calibrator.transform(test_output.probabilities)
+    ]
+
+    raw_bins = calibration_bins(test_output.labels, test_output.probabilities)
+    calibrated_bins = calibration_bins(test_output.labels, calibrated_probabilities)
+    non_empty_diffs = [
+        item.mean_probability - item.observed_proportion
+        for item in raw_bins
+        if item.count >= 100
+    ]
+    mean_diff = statistics.mean(non_empty_diffs) if non_empty_diffs else 0.0
+    if mean_diff > 0.02:
+        error_direction = "trop confiant : les probabilites annoncees sont au-dessus des proportions observees"
+    elif mean_diff < -0.02:
+        error_direction = "trop prudent : les probabilites annoncees sont sous les proportions observees"
+    else:
+        error_direction = "globalement proche sur les grosses tranches"
+
+    return PhaseFourteenResult(
+        raw_bins=raw_bins,
+        calibrated_bins=calibrated_bins,
+        correction_method=(
+            "calibration isotone apprise sur les 20% les plus recents de l'apprentissage temporel"
+        ),
+        error_direction=error_direction,
+        base_train_size=len(base_train_indices),
+        calibration_size=len(calibration_indices),
+        test_size=len(test_indices),
+    )
 
 
 def print_phase_one(result: PhaseOneResult) -> None:
@@ -1535,6 +1653,31 @@ def print_phase_thirteen(result: PhaseThirteenResult) -> None:
     print(f"Credits economises : {result.saved_credits}")
 
 
+def print_calibration_bins(title: str, bins: list[CalibrationBin]) -> None:
+    print(title)
+    for item in bins:
+        print(
+            f"  - {item.label}: {item.count} releves, "
+            f"proba moyenne {item.mean_probability * 100:.2f}%, "
+            f"canulars observes {item.observed_proportion * 100:.2f}%"
+        )
+
+
+def print_phase_fourteen(result: PhaseFourteenResult) -> None:
+    print()
+    print("Phase 14 - Une promesse a 80 %")
+    print(
+        "Decoupe calibration : "
+        f"{result.base_train_size} apprentissage modele, "
+        f"{result.calibration_size} calibration, "
+        f"{result.test_size} test"
+    )
+    print_calibration_bins("Avant correction :", result.raw_bins)
+    print(f"Sens de l'erreur : {result.error_direction}")
+    print(f"Correction : {result.correction_method}")
+    print_calibration_bins("Apres correction :", result.calibrated_bins)
+
+
 def main() -> int:
     download_data_if_missing()
 
@@ -1587,6 +1730,9 @@ def main() -> int:
 
     phase_thirteen = summarize_phase_thirteen(phase_twelve_model_data)
     print_phase_thirteen(phase_thirteen)
+
+    phase_fourteen = train_phase_fourteen(phase_two.typed_rows)
+    print_phase_fourteen(phase_fourteen)
     return 0
 
 
