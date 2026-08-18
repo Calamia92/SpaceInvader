@@ -15,5 +15,5 @@ python analyse.py
 ```
 
 Le script telecharge le CSV dans `data/releves_klaxo3.csv` si le fichier est absent.
-Le CSV, les consignes dans `info/`, l'environnement virtuel et les fichiers IDE ne
+Le CSV, l'environnement virtuel et les fichiers IDE ne
 sont pas versionnes dans Git.
